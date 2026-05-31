@@ -2557,6 +2557,8 @@ dependencies = [
  "eframe",
  "egui",
  "rusqlite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -1,4 +1,5 @@
 mod database;
+mod model;
 
 use database::{Database, ObservationRow};
 use eframe::egui;
