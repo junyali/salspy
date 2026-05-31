@@ -225,7 +225,41 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn ui_import(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, also_match:bool) {}
+    fn ui_import(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, also_match:bool) {
+        if also_match {
+            ui.heading("Import a file and X-reference IPs");
+            ui.label("Lists every existing user in DB with matching IPs to file");
+        } else {
+            ui.heading("Import ndjson export");
+            ui.label("Store observations from imported log");;
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("Choose file...").clicked() && !self.busy {
+                if let Some(p) = rfd::FileDialog::new()
+                    .add_filter("NDJSON", &["ndjson", "json", "jsonl", "txt"])
+                    .pick_file()
+                {
+                    self.import_path = Some(p.display().to_string());
+                }
+            }
+            if let Some(p) = &self.import_path {
+                ui.monospace(p);
+            }
+        });
+        let can_run = self.import_path.is_some() && !self.busy;
+        if ui.add_enabled(can_run, egui::Button::new("Import")).clicked() {
+            if let Some(p) = self.import_path.clone() {
+                self.cross_results.clear();
+                self.start_import(p, also_match, ctx.clone());
+            }
+        }
+        if also_match && !self.cross_results.is_empty() {
+            ui.separator();
+            ui.label("Existing users with matching IPs:");
+            results_table(ui, &self.cross_results);
+        }
+    }
 
     fn ui_search(&mut self, ui: &mut egui::Ui) {}
 }
