@@ -1,6 +1,7 @@
 mod database;
 
 use database::{Database, ObservationRow};
+use eframe::egui;
 use std::sync::mpsc::{Receiver, };
 
 const DB_PATH: &str = "audit.db";
@@ -56,6 +57,53 @@ impl App {
             db_count,
         })
     }
+
+    fn poll_worker(&mut self) {
+
+    }
+}
+
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.busy {
+            self.poll_worker();
+            ctx.request_repaint();
+        }
+
+        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.tab, Tab::Import, "Import");
+                ui.selectable_value(&mut self.tab, Tab::Search, "Search");
+                ui.selectable_value(&mut self.tab, Tab::ImportAndMatch, "Import and X-ref");
+                ui.separator();
+                ui.label(format!("DB Rows: {}", self.db_count));
+            });
+        });
+
+        egui::TopBottomPanel::bottom("tabs").show(ctx, |ui| {
+            if self.busy {
+                ui.label(format!(
+                    "Working... {} lines read, {} parsed",
+                    self.progress_lines,
+                    self.progress_parsed
+                ));
+            } else if !self.status.is_empty() {
+                ui.label(&self.status);
+            }
+        });
+
+        egui::CentralPanel::default().show(ctx, |ui| match self.tab {
+            Tab::Import => self.ui_import(ui, ctx, false),
+            Tab::ImportAndMatch => self.ui_import(ui, ctx, true),
+            Tab::Search => self.ui_search(ui),
+        });
+    }
+}
+
+impl App {
+    fn ui_import(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, also_match:bool) {}
+
+    fn ui_search(&mut self, ui: &mut egui::Ui) {}
 }
 
 fn main() -> eframe::Result<()> {
