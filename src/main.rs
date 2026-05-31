@@ -231,7 +231,7 @@ impl App {
             ui.label("Lists every existing user in DB with matching IPs to file");
         } else {
             ui.heading("Import ndjson export");
-            ui.label("Store observations from imported log");;
+            ui.label("Store observations from imported log");
         }
         ui.separator();
         ui.horizontal(|ui| {
@@ -261,7 +261,19 @@ impl App {
         }
     }
 
-    fn ui_search(&mut self, ui: &mut egui::Ui) {}
+    fn ui_search(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Search by IP");
+        ui.separator();
+        ui.horizontal(|ui| {
+            let resp = ui.text_edit_singleline(&mut self.search_query);
+            let go = ui.button("Search").clicked() || (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+            if go {
+                self.run_search();
+            }
+        });
+        ui.separator();
+        results_table(ui, &self.search_results);
+    }
 }
 
 fn results_table(ui: &mut egui::Ui, rows: &[ObservationRow]) {
