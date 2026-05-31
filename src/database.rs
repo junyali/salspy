@@ -27,7 +27,7 @@ impl Database {
         conn.pragma_update(None, "synchronous", &"NORMAL")?;
         conn.pragma_update(None, "foreign_keys", &"ON")?;
 
-        conn.execute_batch(include_str!("schema.sql"))?;
+        conn.execute_batch(include_str!("../schema.sql"))?;
         Ok(Database { conn})
     }
 
