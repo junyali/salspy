@@ -4,6 +4,8 @@ use std::net::IpAddr;
 #[derive(Debug, Deserialize)]
 pub struct AuditEntry {
     #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
     pub date_create: Option<i64>,
     #[serde(default)]
     pub action: Option<String>,
@@ -55,6 +57,7 @@ pub struct Details {
 
 #[derive(Debug, Clone)]
 pub struct Observation {
+    pub event_id: String,
     pub user_id: String,
     pub user_name: Option<String>,
     pub user_email: Option<String>,
@@ -72,6 +75,10 @@ pub fn canonical_ip(raw: &str) -> Option<String> {
 pub fn entry_to_observations(entry: &AuditEntry) -> Vec<Observation> {
     let mut out = Vec::new();
     let user = entry.actor.as_ref().and_then(|a| a.user.as_ref());
+    let event_id = match entry.id.clone() {
+        Some(id) => id,
+        None => return out,
+    };
     let user_id = match user.and_then(|u| u.id.clone()) {
         Some(id) => id,
         None => return out,
@@ -83,6 +90,7 @@ pub fn entry_to_observations(entry: &AuditEntry) -> Vec<Observation> {
     if let Some(ip_raw) = ctx.and_then(|c| c.ip_address.as_ref()) {
         if let Some(ip) = canonical_ip(ip_raw) {
             out.push(Observation {
+                event_id: event_id.clone(),
                 user_id: user_id.clone(),
                 user_name: user_name.clone(),
                 user_email: user_email.clone(),
@@ -97,6 +105,7 @@ pub fn entry_to_observations(entry: &AuditEntry) -> Vec<Observation> {
         if let Some(prev_ip_raw) = details.previous_ip_address.as_ref() {
             if let Some(ip) = canonical_ip(prev_ip_raw) {
                 out.push(Observation {
+                    event_id: format!("{event_id}:prev"),
                     user_id: user_id.clone(),
                     user_name: user_name.clone(),
                     user_email: user_email.clone(),

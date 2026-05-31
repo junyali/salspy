@@ -1,6 +1,6 @@
 use crate::model::Observation;
 use anyhow::Result;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 pub struct Database {
     conn: Connection
@@ -56,6 +56,15 @@ impl Database {
                 "#,
             )?;
             for o in obs {
+                let seen: bool = tx.query_row(
+                    "SELECT 1 FROM seen_events WHERE event_id = ?1",
+                    params![o.event_id],
+                    |_| Ok(()),
+                ).optional()?.is_some();
+                if seen {
+                    continue;
+                }
+                tx.execute("INSERT INTO seen_events(event_id) VALUES (?1)", params![o.event_id])?;
                 stmt.execute(params![
                     o.user_id,
                     o.user_name,
