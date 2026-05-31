@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::net::IpAddr;
 
 #[derive(Debug, Deserialize)]
 pub struct AuditEntry {
@@ -61,4 +62,60 @@ pub struct Observation {
     pub user_agent: Option<String>,
     pub ja3: Option<String>,
     pub seen_at: Option<i64>,
+}
+
+pub fn canonical_ip(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    trimmed.parse::<IpAddr>().ok().map(|ip| ip.to_string())
+}
+
+pub fn entry_to_observations(entry: &AuditEntry) -> Vec<Observation> {
+    let mut out = Vec::new();
+    let user = entry.actor.as_ref().and_then(|a| a.user.as_ref());
+    let user_id = match user.and_then(|u| u.id.clone()) {
+        Some(id) => id,
+        None => return out,
+    };
+    let user_name = user.and_then(|u| u.name.clone());
+    let user_email = user.and_then(|u| u.email.clone());
+    let ja3 = entry.details.as_ref().and_then(|d| d.client_ja3_fingerprint.clone());
+    let ctx = entry.context.as_ref();
+    if let Some(ip_raw) = ctx.and_then(|c| c.ip_address.as_ref()) {
+        if let Some(ip) = canonical_ip(ip_raw) {
+            out.push(Observation {
+                user_id: user_id.clone(),
+                user_name: user_name.clone(),
+                user_email: user_email.clone(),
+                ip,
+                user_agent: ctx.and_then(|c| c.ua.clone()),
+                ja3: ja3.clone(),
+                seen_at: entry.date_create
+            });
+        }
+    }
+    if let Some(details) = entry.details.as_ref() {
+        if let Some(prev_ip_raw) = details.previous_ip_address.as_ref() {
+            if let Some(ip) = canonical_ip(prev_ip_raw) {
+                out.push(Observation {
+                    user_id: user_id.clone(),
+                    user_name: user_name.clone(),
+                    user_email: user_email.clone(),
+                    ip,
+                    user_agent: details.previous_ua.clone(),
+                    ja3,
+                    seen_at: entry.date_create,
+                });
+            }
+        }
+    }
+    out
+}
+
+pub fn parse_line(line: &str) -> anyhow::Result<Option<AuditEntry>> {
+    let line = line.trim();
+    if line.is_empty() {
+        return Ok(None);
+    }
+    let entry: AuditEntry = serde_json::from_str(line)?;
+    Ok(Some(entry))
 }

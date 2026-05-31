@@ -3,7 +3,10 @@ mod model;
 
 use database::{Database, ObservationRow};
 use eframe::egui;
-use std::sync::mpsc::{Receiver, };
+use std::sync::mpsc::{Receiver, Sender};
+use std::io::{BufRead, BufReader};
+use std::collections::HashSet;
+use std::fs::File;
 
 const DB_PATH: &str = "audit.db";
 
@@ -14,7 +17,8 @@ enum Msg {
         skipped: usize,
         cross_matches: Vec<ObservationRow>,
         ips_in_file: usize,
-    }
+    },
+    Error(String),
 }
 
 #[derive(PartialEq)]
@@ -59,9 +63,86 @@ impl App {
         })
     }
 
+    fn start_import(&mut self, path: String, also_match: bool, ctx: egui::Context) {
+        let (tx, rx): (Sender<Msg>, Receiver<Msg>) = std::sync::mpsc::channel();
+        self.rx = Some(rx);
+        self.busy = true;
+        self.progress_lines = 0;
+        self.progress_parsed = 0;
+        self.status = "Working...".into();
+        std::thread::spawn(move || {
+            let result = run_import(&path, also_match, &tx, &ctx);
+            if let Err(e) = result {
+                let _ = tx.send(Msg::Error(format!("{e:#}")));
+                ctx.request_repaint();
+            }
+        });
+    }
+
     fn poll_worker(&mut self) {
 
     }
+}
+
+fn run_import(
+    path: &str,
+    also_match: bool,
+    tx: &Sender<Msg>,
+    ctx: &egui::Context,
+) -> anyhow::Result<()> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut db = Database::open(DB_PATH)?;
+    let mut batch: Vec<model::Observation> = Vec::with_capacity(10_000);
+    let mut lines = 0usize;
+    let mut parsed = 0usize;
+    let mut skipped = 0usize;
+    let mut inserted = 0usize;
+    let mut file_ips: HashSet<String> = HashSet::new();
+    for line in reader.lines() {
+        let line = line?;
+        lines += 1;
+        match model::parse_line(&line) {
+            Ok(Some(entry)) => {
+                let obs = model::entry_to_observations(&entry);
+                if obs.is_empty() {
+                    skipped += 1;
+                } else {
+                    parsed += 1;
+                    for o in &obs {
+                        file_ips.insert(o.ip.clone());
+                    }
+                    batch.extend(obs);
+                }
+            }
+            Ok(None) => {}
+            Err(_) => skipped += 1,
+        }
+        if batch.len() >= 10_000 {
+            inserted += db.import(&batch)?;
+            batch.clear();
+            let _ = tx.send(Msg::Progress { lines, parsed });
+            ctx.request_repaint();
+        }
+    }
+    if !batch.is_empty() {
+        inserted += db.import(&batch)?;
+    }
+    let cross_matches = if also_match {
+        let ips: Vec<String> = file_ips.iter().cloned().collect();
+        db.match_ips(&ips)?
+    } else {
+        Vec::new()
+    };
+
+    tx.send(Msg::Done {
+        inserted,
+        skipped,
+        cross_matches,
+        ips_in_file: file_ips.len(),
+    })?;
+    ctx.request_repaint();
+    Ok(())
 }
 
 impl eframe::App for App {
