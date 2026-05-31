@@ -80,7 +80,49 @@ impl App {
     }
 
     fn poll_worker(&mut self) {
+        let mut done = false;
+        if let Some(rx) = &self.rx {
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    Msg::Progress { lines, parsed } => {
+                        self.progress_lines = lines;
+                        self.progress_parsed = parsed;
+                    }
+                    Msg::Done {
+                        inserted,
+                        skipped,
+                        cross_matches,
+                        ips_in_file
+                    } => {
+                        self.status = format!("Done [{inserted} observations written, {skipped} lines skipped]");
+                        if !cross_matches.is_empty() || ips_in_file > 0 {
+                            self.status.push_str(&format!("X-matched {ips_in_file} unique IPs, {} existing matching found", cross_matches.len()));
+                        }
+                        self.cross_results = cross_matches;
+                        self.db_count = self.db.count().unwrap_or(self.db_count);
+                        done = true;
+                    }
+                    Msg::Error(e) => {
+                        self.status = format!("Error: {e}");
+                        done = true;
+                    }
+                }
+            }
+        }
+        if done {
+            self.busy = false;
+            self.rx = None;
+        }
+    }
 
+    fn run_search(&mut self) {
+        match self.db.search_ip(&self.search_query) {
+            Ok(rows) => {
+                self.status = format!("{} matching", rows.len());
+                self.search_results = rows;
+            }
+            Err(e) => self.status = format!("Error: {e:#}"),
+        }
     }
 }
 
