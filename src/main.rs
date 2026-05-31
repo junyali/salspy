@@ -188,6 +188,35 @@ impl App {
     fn ui_search(&mut self, ui: &mut egui::Ui) {}
 }
 
+fn results_table(ui: &mut egui::Ui, rows: &[ObservationRow]) {
+    egui::ScrollArea::both().show(ui, |ui| {
+        egui::Grid::new("results")
+            .striped(true)
+            .show(ui, |ui| {
+                ui.strong("IP");
+                ui.strong("User");
+                ui.strong("Email");
+                ui.strong("UA");
+                ui.strong("JA3");
+                ui.strong("Hits");
+                ui.end_row();
+                for r in rows {
+                    ui.monospace(&r.ip);
+                    ui.label(format!(
+                        "{} ({})",
+                        r.user_name.as_deref().unwrap_or("?"),
+                        r.user_id
+                    ));
+                    ui.label(r.user_email.as_deref().unwrap_or(""));
+                    ui.label(r.user_agent.as_deref().unwrap_or(""));
+                    ui.monospace(r.ja3.as_deref().unwrap_or(""));
+                    ui.label(r.hits.to_string());
+                    ui.end_row();
+                }
+            });
+    });
+}
+
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
