@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+eframe = "0.33.3"
+egui = "0.33.3"
+anyhow = "1.0.102"
+rusqlite = "0.40.0"
