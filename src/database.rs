@@ -31,6 +31,16 @@ impl Database {
         Ok(Database { conn})
     }
 
+    pub fn clear(&mut self) -> Result<()> {
+        self.conn.execute_batch(
+            "
+            DELETE FROM observations;
+            DELETE FROM seen_events;
+            ",
+        )?;
+        Ok(())
+    }
+
     pub fn import(&mut self, obs: &[Observation]) -> Result<usize> {
         let tx = self.conn.transaction()?;
         let mut affected = 0usize;
