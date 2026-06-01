@@ -6,17 +6,31 @@ use eframe::egui;
 use std::sync::mpsc::{Receiver, Sender};
 use std::io::{BufRead, BufReader};
 use std::collections::HashSet;
-use std::fs::File;
+use std::fs::{File, copy, metadata};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::Path;
 
 const DB_PATH: &str = "audit.db";
 
 enum Msg {
-    Progress { lines: usize, parsed: usize },
+    Progress {
+        bytes_done: u64,
+        bytes_total: u64,
+        parsed: usize,
+        skipped: usize,
+        written: usize,
+        file_index: usize,
+        file_count: usize,
+    },
     Done {
         inserted: usize,
         skipped: usize,
         cross_matches: Vec<ObservationRow>,
         ips_in_file: usize,
+    },
+    Aborted {
+        inserted: usize,
     },
     Error(String),
 }
@@ -31,47 +45,76 @@ enum Tab {
 struct App {
     db: Database,
     tab: Tab,
-    import_path: Option<String>,
+    import_paths: Vec<String>,
     busy: bool,
     rx: Option<Receiver<Msg>>,
-    progress_lines: usize,
+    cancel: Arc<AtomicBool>,
+    progress_bytes_done: u64,
+    progress_bytes_total: u64,
     progress_parsed: usize,
+    progress_skipped: usize,
+    progress_written: usize,
+    progress_file_index: usize,
+    progress_file_count: usize,
     status: String,
     search_query: String,
     search_results: Vec<ObservationRow>,
     cross_results: Vec<ObservationRow>,
     db_count: i64,
+    safe_writes: bool,
+    batch_size: usize,
+    confirm_clear: bool,
 }
 
 impl App {
     fn new() -> anyhow::Result<Self> {
-        let db = Database::open(DB_PATH)?;
+        let safe_writes = true;
+        let db = Database::open(DB_PATH, safe_writes)?;
         let db_count = db.count().unwrap_or(0);
         Ok(App {
             db,
             tab: Tab::Import,
-            import_path: None,
+            import_paths: Vec::new(),
             busy: false,
             rx: None,
-            progress_lines: 0,
+            cancel: Arc::new(AtomicBool::new(false)),
+            progress_bytes_done: 0,
+            progress_bytes_total: 0,
             progress_parsed: 0,
+            progress_skipped: 0,
+            progress_written: 0,
+            progress_file_index: 0,
+            progress_file_count: 0,
             status: String::new(),
             search_query: String::new(),
             search_results: Vec::new(),
             cross_results: Vec::new(),
             db_count,
+            safe_writes,
+            batch_size: 10_000,
+            confirm_clear: false,
         })
     }
 
-    fn start_import(&mut self, path: String, also_match: bool, ctx: egui::Context) {
+    fn start_import(&mut self, paths: Vec<String>, also_match: bool, ctx: egui::Context) {
         let (tx, rx): (Sender<Msg>, Receiver<Msg>) = std::sync::mpsc::channel();
         self.rx = Some(rx);
         self.busy = true;
-        self.progress_lines = 0;
+        self.cancel.store(false, Ordering::Relaxed);
+        self.progress_bytes_done = 0;
+        self.progress_bytes_total = 0;
         self.progress_parsed = 0;
+        self.progress_skipped = 0;
+        self.progress_written = 0;
+        self.progress_file_index = 0;
+        self.progress_file_count = paths.len();
         self.status = "Working...".into();
+
+        let cancel = self.cancel.clone();
+        let safe_writes = self.safe_writes;
+        let batch_size = self.batch_size;
         std::thread::spawn(move || {
-            let result = run_import(&path, also_match, &tx, &ctx);
+            let result = run_import(&paths, also_match, safe_writes, batch_size, &cancel, &tx, &ctx);
             if let Err(e) = result {
                 let _ = tx.send(Msg::Error(format!("{e:#}")));
                 ctx.request_repaint();
@@ -84,9 +127,22 @@ impl App {
         if let Some(rx) = &self.rx {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
-                    Msg::Progress { lines, parsed } => {
-                        self.progress_lines = lines;
+                    Msg::Progress {
+                        bytes_done,
+                        bytes_total,
+                        parsed,
+                        skipped,
+                        written,
+                        file_index,
+                        file_count,
+                    } => {
+                        self.progress_bytes_done = bytes_done;
+                        self.progress_bytes_total = bytes_total;
                         self.progress_parsed = parsed;
+                        self.progress_skipped = skipped;
+                        self.progress_written = written;
+                        self.progress_file_index = file_index;
+                        self.progress_file_count = file_count;
                     }
                     Msg::Done {
                         inserted,
@@ -99,6 +155,13 @@ impl App {
                             self.status.push_str(&format!("X-matched {ips_in_file} unique IPs, {} existing matching found", cross_matches.len()));
                         }
                         self.cross_results = cross_matches;
+                        self.db_count = self.db.count().unwrap_or(self.db_count);
+                        done = true;
+                    }
+                    Msg::Aborted {
+                        inserted
+                    } => {
+                        self.status = format!("Stopped [{inserted} written]");
                         self.db_count = self.db.count().unwrap_or(self.db_count);
                         done = true;
                     }
@@ -127,61 +190,102 @@ impl App {
 }
 
 fn run_import(
-    path: &str,
+    paths: &[String],
     also_match: bool,
+    safe_writes: bool,
+    batch_size: usize,
+    cancel: &Arc<AtomicBool>,
     tx: &Sender<Msg>,
     ctx: &egui::Context,
 ) -> anyhow::Result<()> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut db = Database::open(DB_PATH)?;
-    let mut batch: Vec<model::Observation> = Vec::with_capacity(10_000);
-    let mut lines = 0usize;
+    if !safe_writes && Path::new(DB_PATH).exists() {
+        let _ = copy(DB_PATH, format!("{DB_PATH}.old"));
+    }
+    let mut db = Database::open(DB_PATH, safe_writes)?;
     let mut parsed = 0usize;
     let mut skipped = 0usize;
     let mut inserted = 0usize;
     let mut file_ips: HashSet<String> = HashSet::new();
-    for line in reader.lines() {
-        let line = line?;
-        lines += 1;
-        match model::parse_line(&line) {
-            Ok(Some(entry)) => {
-                let obs = model::entry_to_observations(&entry);
-                if obs.is_empty() {
-                    skipped += 1;
-                } else {
-                    parsed += 1;
-                    for o in &obs {
-                        file_ips.insert(o.ip.clone());
-                    }
-                    batch.extend(obs);
-                }
+    let file_count = paths.len();
+
+    let mut aborted = false;
+    'outer: for (file_index, path) in paths.iter().enumerate() {
+        let bytes_total = metadata(path).map(|m| m.len()).unwrap_or(0);
+        let mut bytes_done = 064;
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut batch: Vec<model::Observation> = Vec::with_capacity(batch_size);
+
+        for line in reader.lines() {
+            if cancel.load(Ordering::Relaxed) {
+                aborted = true;
+                break 'outer;
             }
-            Ok(None) => {}
-            Err(_) => skipped += 1,
+            let line = line?;
+            bytes_done += line.len() as u64 + 1;
+            match model::parse_line(&line) {
+                Ok(Some(entry)) => {
+                    let obs = model::entry_to_observations(&entry);
+                    if obs.is_empty() {
+                        skipped += 1;
+                    } else {
+                        parsed += 1;
+                        for o in &obs {
+                            file_ips.insert(o.ip.clone());
+                        }
+                        batch.extend(obs);
+                    }
+                }
+                Ok(None) => {}
+                Err(_) => skipped += 1,
+            }
+            if batch.len() >= batch_size {
+                inserted += db.import(&batch)?;
+                batch.clear();
+                let _ = tx.send(Msg::Progress {
+                    bytes_done,
+                    bytes_total,
+                    parsed,
+                    skipped,
+                    written: inserted,
+                    file_index,
+                    file_count,
+                });
+                ctx.request_repaint();
+            }
         }
-        if batch.len() >= 10_000 {
+        if !batch.is_empty() {
             inserted += db.import(&batch)?;
-            batch.clear();
-            let _ = tx.send(Msg::Progress { lines, parsed });
-            ctx.request_repaint();
         }
+        let _ = tx.send(Msg::Progress {
+            bytes_done: bytes_total,
+            bytes_total,
+            parsed,
+            skipped,
+            written: inserted,
+            file_index,
+            file_count
+        });
+        ctx.request_repaint();
     }
-    if !batch.is_empty() {
-        inserted += db.import(&batch)?;
+
+    if aborted {
+        tx.send(Msg::Aborted { inserted })?;
+        ctx.request_repaint();
+        return Ok(());
     }
+
     let cross_matches = if also_match {
         let ips: Vec<String> = file_ips.iter().cloned().collect();
         db.match_ips(&ips)?
     } else {
         Vec::new()
     };
-
     tx.send(Msg::Done {
         inserted,
         skipped,
         cross_matches,
-        ips_in_file: file_ips.len(),
+        ips_in_file: file_ips.len()
     })?;
     ctx.request_repaint();
     Ok(())
@@ -204,13 +308,25 @@ impl eframe::App for App {
             });
         });
 
-        egui::TopBottomPanel::bottom("tabs").show(ctx, |ui| {
+        egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             if self.busy {
-                ui.label(format!(
-                    "Working... {} lines read, {} parsed",
-                    self.progress_lines,
-                    self.progress_parsed
-                ));
+                let fraction = if self.progress_bytes_total > 0 {
+                    self.progress_bytes_done as f32 / self.progress_bytes_total as f32
+                } else {
+                    0.0
+                };
+                ui.horizontal(|ui| {
+                    ui.label(format!(
+                        "File {} of {}",
+                        self.progress_file_index + 1,
+                        self.progress_file_count
+                    ));
+                    if ui.button("Stop").clicked() {
+                        self.cancel.store(true, Ordering::Relaxed);
+                    }
+                });
+                ui.add(egui::ProgressBar::new(fraction).show_percentage());
+                ui.label(format!("{} parsed | {} skipped | {} written", self.progress_parsed, self.progress_skipped, self.progress_written));
             } else if !self.status.is_empty() {
                 ui.label(&self.status);
             }
@@ -234,25 +350,33 @@ impl App {
             ui.label("Store observations from imported log");
         }
         ui.separator();
+        if self.busy {
+            ui.label("Running...");
+        }
         ui.horizontal(|ui| {
-            if ui.button("Choose file...").clicked() && !self.busy {
-                if let Some(p) = rfd::FileDialog::new()
+            if ui.button("Choose files...").clicked() && !self.busy {
+                if let Some(ps) = rfd::FileDialog::new()
                     .add_filter("NDJSON", &["ndjson", "json", "jsonl", "txt"])
-                    .pick_file()
+                    .pick_files()
                 {
-                    self.import_path = Some(p.display().to_string());
+                    self.import_paths = ps.iter().map(|p| p.display().to_string()).collect();
                 }
             }
-            if let Some(p) = &self.import_path {
-                ui.monospace(p);
+            if !self.import_paths.is_empty() {
+                ui.label(format!("{} file(s) selected", self.import_paths.len()));
+                if ui.button("Clear").clicked() {
+                    self.import_paths.clear();
+                }
             }
         });
-        let can_run = self.import_path.is_some() && !self.busy;
+        for p in &self.import_paths {
+            ui.monospace(p);
+        }
+        let can_run = !self.import_paths.is_empty();
         if ui.add_enabled(can_run, egui::Button::new("Import")).clicked() {
-            if let Some(p) = self.import_path.clone() {
-                self.cross_results.clear();
-                self.start_import(p, also_match, ctx.clone());
-            }
+            self.cross_results.clear();
+            let paths = self.import_paths.clone();
+            self.start_import(paths, also_match, ctx.clone());
         }
         if also_match && !self.cross_results.is_empty() {
             ui.separator();
