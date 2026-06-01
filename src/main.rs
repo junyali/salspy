@@ -40,6 +40,7 @@ enum Tab {
     Import,
     Search,
     ImportAndMatch,
+    Settings,
 }
 
 struct App {
@@ -303,6 +304,7 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.tab, Tab::Import, "Import");
                 ui.selectable_value(&mut self.tab, Tab::Search, "Search");
                 ui.selectable_value(&mut self.tab, Tab::ImportAndMatch, "Import and X-ref");
+                ui.selectable_value(&mut self.tab, Tab::Settings, "Settings");
                 ui.separator();
                 ui.label(format!("DB Rows: {}", self.db_count));
             });
@@ -336,6 +338,7 @@ impl eframe::App for App {
             Tab::Import => self.ui_import(ui, ctx, false),
             Tab::ImportAndMatch => self.ui_import(ui, ctx, true),
             Tab::Search => self.ui_search(ui),
+            Tab::Settings => self.ui_settings(ui),
         });
     }
 }
@@ -397,6 +400,26 @@ impl App {
         });
         ui.separator();
         results_table(ui, &self.search_results);
+    }
+
+    fn ui_settings(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Settings");
+        ui.separator();
+
+        ui.checkbox(&mut self.safe_writes, "Safe writes").on_hover_text("Enable synchronised writing (you should probably enable this)");
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("Batch size");
+            ui.add(
+                egui::DragValue::new(&mut self.batch_size).range(1..=1_000_000).speed(1.0),
+            );
+            if ui.small_button("-").clicked() && self.batch_size > 0 {
+                self.batch_size -= 1;
+            }
+            if ui.small_button("+").clicked() && self.batch_size < 1_000_000 {
+                self.batch_size += 1;
+            }
+        });
     }
 }
 
