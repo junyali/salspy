@@ -20,11 +20,12 @@ pub struct ObservationRow {
 }
 
 impl Database {
-    pub fn open(path: &str) -> Result<Self> {
+    pub fn open(path: &str, safe_writes: bool) -> Result<Self> {
         let conn = Connection::open(path)?;
 
         conn.pragma_update(None, "journal_mode", &"wal")?;
-        conn.pragma_update(None, "synchronous", &"NORMAL")?;
+        let sync = if safe_writes { "NORMAL" } else { "OFF" };
+        conn.pragma_update(None, "synchronous", &sync)?;
         conn.pragma_update(None, "foreign_keys", &"ON")?;
 
         conn.execute_batch(include_str!("../schema.sql"))?;
