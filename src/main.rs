@@ -11,8 +11,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path;
 use std::thread::spawn;
+use rfd::FileDialog;
 
-const DB_PATH: &str = "audit.db";
+const DEFAULT_DB_NAME: &str = "audit.db";
 
 enum Msg {
     Progress {
@@ -34,6 +35,11 @@ enum Msg {
         inserted: usize,
     },
     Error(String),
+}
+
+#[derive(PartialEq, Clone, Copy)]
+enum Backend {
+    Sqlite,
 }
 
 #[derive(PartialEq)]
@@ -68,12 +74,26 @@ struct App {
     safe_writes: bool,
     batch_size: usize,
     confirm_clear: bool,
+    backend: Backend,
+    db_folder: String,
+    db_name: String,
+}
+
+impl Backend {
+    fn label(&self) -> &'static str {
+        match self {
+            Backend::Sqlite => "SQLite",
+        }
+    }
 }
 
 impl App {
     fn new() -> anyhow::Result<Self> {
         let safe_writes = true;
-        let db = Database::open(DB_PATH, safe_writes)?;
+        let db_folder = String::new();
+        let db_name = DEFAULT_DB_NAME.to_string();
+        let path = compose_db_path(&db_folder, &db_name);
+        let db = Database::open(&path, safe_writes)?;
         let db_count = db.count().unwrap_or(0);
         let known_actions = db.distinct_actions().unwrap_or_default();
         Ok(App {
@@ -100,6 +120,9 @@ impl App {
             safe_writes,
             batch_size: 10_000,
             confirm_clear: false,
+            backend: Backend::Sqlite,
+            db_folder,
+            db_name,
         })
     }
 
@@ -121,8 +144,9 @@ impl App {
         let safe_writes = self.safe_writes;
         let batch_size = self.batch_size;
         let actions: Vec<String> = self.selected_actions.iter().cloned().collect();
+        let db_path = compose_db_path(&self.db_folder, &self.db_name);
         spawn(move || {
-            let result = run_import(&paths, also_match, safe_writes, batch_size, &actions, &cancel, &tx, &ctx);
+            let result = run_import(&paths, also_match, safe_writes, batch_size, &db_path, &actions, &cancel, &tx, &ctx);
             if let Err(e) = result {
                 let _ = tx.send(Msg::Error(format!("{e:#}")));
                 ctx.request_repaint();
@@ -206,15 +230,16 @@ fn run_import(
     also_match: bool,
     safe_writes: bool,
     batch_size: usize,
+    db_path: &str,
     actions: &[String],
     cancel: &Arc<AtomicBool>,
     tx: &Sender<Msg>,
     ctx: &egui::Context,
 ) -> anyhow::Result<()> {
-    if !safe_writes && Path::new(DB_PATH).exists() {
-        let _ = copy(DB_PATH, format!("{DB_PATH}.old"));
+    if !safe_writes && Path::new(db_path).exists() {
+        let _ = copy(db_path, format!("{db_path}.old"));
     }
-    let mut db = Database::open(DB_PATH, safe_writes)?;
+    let mut db = Database::open(db_path, safe_writes)?;
     let mut parsed = 0usize;
     let mut skipped = 0usize;
     let mut inserted = 0usize;
@@ -441,6 +466,47 @@ impl App {
         ui.heading("Settings");
         ui.separator();
 
+        ui.horizontal(|ui| {
+            ui.label("Database backend");
+            egui::ComboBox::from_id_salt("backend_select")
+                .selected_text(self.backend.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.backend, Backend:: Sqlite, Backend::Sqlite.label());
+                });
+        });
+        ui.add_space(8.0);
+
+        match self.backend {
+            Backend::Sqlite => {
+                ui.label("SQLite DB Location");
+                ui.horizontal(|ui| {
+                    if ui.button("Choose directory...").clicked() {
+                        if let Some(dir) = FileDialog::new().pick_folder() {
+                            self.db_folder = dir.display().to_string();
+                        }
+                    }
+                    let shown = if self.db_folder.is_empty() {
+                        "(working directory)"
+                    } else {
+                        self.db_folder.as_str()
+                    };
+                    ui.monospace(shown).on_hover_text(&self.db_folder);
+                });
+                ui.horizontal(|ui| {
+                    ui.label("DB name");
+                    ui.text_edit_singleline(&mut self.db_name);
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Apply / open").clicked() && !self.busy {
+                        self.reopen_db();
+                    }
+                    let preview = compose_db_path(&self.db_folder, &self.db_name);
+                    ui.monospace(preview);
+                });
+            }
+        }
+
+        ui.separator();
         ui.checkbox(&mut self.safe_writes, "Safe writes").on_hover_text("Enable synchronised writing (you should probably enable this)");
         ui.add_space(8.0);
         ui.horizontal(|ui| {
@@ -496,6 +562,28 @@ impl App {
                         }
                     })
             });
+    }
+
+    fn reopen_db(&mut self) {
+        let path = compose_db_path(&self.db_folder, &self.db_name);
+        match Database::open(&path, self.safe_writes) {
+            Ok(db) => {
+                self.db = db;
+                self.db_count = self.db.count().unwrap_or(0);
+                self.known_actions = self.db.distinct_actions().unwrap_or_default();
+                self.status = format!("Opened {path}");
+            }
+            Err(e) => self.status = format!("Error opening {path}: {e:#}")
+        }
+    }
+}
+
+fn compose_db_path(folder: &str, name: &str) -> String {
+    let name = if name.trim().is_empty() { DEFAULT_DB_NAME } else { name.trim() };
+    if folder.trim().is_empty() {
+        name.to_string()
+    } else {
+        Path::new(folder).join(name).to_string_lossy().to_string()
     }
 }
 
