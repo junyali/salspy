@@ -634,7 +634,7 @@ impl App {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.small_button("All").clicked() {
-                        self.selected_actions.clone();
+                        self.selected_actions.clear();
                     }
                     if ui.small_button("None").clicked() {
                         self.selected_actions = self.known_actions.iter().cloned().collect();
@@ -676,7 +676,7 @@ impl App {
                 self.active_backend = self.backend;
                 self.status = match self.backend {
                     Backend::Sqlite => format!("Opened SQLite: {}", compose_db_path(&self.db_folder, &self.db_name)),
-                    Backend::Postgres => format!("Connected: {}@{}/{}", self.postgres_user, self.postgres_user, self.postgres_port),
+                    Backend::Postgres => format!("Connected: {}@{}/{}", self.postgres_user, self.postgres_host, self.postgres_dbname),
                 };
             }
             Err(e) => {
