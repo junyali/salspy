@@ -1,7 +1,7 @@
 mod database;
 mod model;
 
-use database::{Database, ObservationRow};
+use database::{Database, DbSpec, ObservationRow};
 use eframe::egui;
 use std::sync::mpsc::{Receiver, Sender};
 use std::io::{BufRead, BufReader};
@@ -76,6 +76,7 @@ struct App {
     batch_size: usize,
     confirm_clear: bool,
     backend: Backend,
+    active_backend: Backend,
     db_folder: String,
     db_name: String,
     postgres_host: String,
@@ -99,8 +100,8 @@ impl App {
         let safe_writes = true;
         let db_folder = String::new();
         let db_name = DEFAULT_DB_NAME.to_string();
-        let path = compose_db_path(&db_folder, &db_name);
-        let db = Database::open(&path, safe_writes)?;
+        let spec = DbSpec::Sqlite { path: compose_db_path(&db_folder, &db_name), safe_writes };
+        let mut db = Database::open(&spec)?;
         let db_count = db.count().unwrap_or(0);
         let known_actions = db.distinct_actions().unwrap_or_default();
         Ok(App {
@@ -128,6 +129,7 @@ impl App {
             batch_size: 10_000,
             confirm_clear: false,
             backend: Backend::Sqlite,
+            active_backend: Backend::Sqlite,
             db_folder,
             db_name,
             postgres_host: "localhost".to_string(),
@@ -153,12 +155,14 @@ impl App {
         self.status = "Working...".into();
 
         let cancel = self.cancel.clone();
-        let safe_writes = self.safe_writes;
         let batch_size = self.batch_size;
         let actions: Vec<String> = self.selected_actions.iter().cloned().collect();
-        let db_path = compose_db_path(&self.db_folder, &self.db_name);
+        let spec = match self.current_spec() {
+            Ok(s) => s,
+            Err(e) => { self.status = e; return; }
+        };
         spawn(move || {
-            let result = run_import(&paths, also_match, safe_writes, batch_size, &db_path, &actions, &cancel, &tx, &ctx);
+            let result = run_import(&paths, also_match, batch_size, spec, &actions, &cancel, &tx, &ctx);
             if let Err(e) = result {
                 let _ = tx.send(Msg::Error(format!("{e:#}")));
                 ctx.request_repaint();
@@ -235,23 +239,43 @@ impl App {
             Err(e) => self.status = format!("Error: {e:#}"),
         }
     }
+
+    fn current_spec(&self) -> Result<DbSpec, String> {
+        match self.backend {
+            Backend::Sqlite => Ok(DbSpec::Sqlite {
+                path: compose_db_path(&self.db_folder, &self.db_name),
+                safe_writes: self.safe_writes,
+            }),
+            Backend::Postgres => {
+                let port: u16 = self.postgres_port.trim().parse().map_err(|_| format!("Invalid port: '{}'", self.postgres_port))?;
+                Ok(DbSpec::Postgres {
+                    host: self.postgres_host.trim().to_string(),
+                    port,
+                    user: self.postgres_user.trim().to_string(),
+                    password: self.postgres_password.clone(),
+                    dbname: self.postgres_dbname.trim().to_string(),
+                })
+            }
+        }
+    }
 }
 
 fn run_import(
     paths: &[String],
     also_match: bool,
-    safe_writes: bool,
     batch_size: usize,
-    db_path: &str,
+    spec: DbSpec,
     actions: &[String],
     cancel: &Arc<AtomicBool>,
     tx: &Sender<Msg>,
     ctx: &egui::Context,
 ) -> anyhow::Result<()> {
-    if !safe_writes && Path::new(db_path).exists() {
-        let _ = copy(db_path, format!("{db_path}.old"));
+    if let DbSpec::Sqlite { path, safe_writes: false } = &spec {
+        if Path::new(path).exists() {
+            let _ = copy(path, format!("{path}.old"));
+        }
     }
-    let mut db = Database::open(db_path, safe_writes)?;
+    let mut db = Database::open(&spec)?;
     let mut parsed = 0usize;
     let mut skipped = 0usize;
     let mut inserted = 0usize;
@@ -357,7 +381,7 @@ impl eframe::App for App {
                 ui.separator();
                 ui.label(format!("Rows: {}", self.db_count));
                 ui.separator();
-                let current = match self.backend {
+                let current = match self.active_backend {
                     Backend::Sqlite => format!("SQLite: {}", compose_db_path(&self.db_folder, &self.db_name)),
                     Backend::Postgres => format!("Postgres: {}@{}/{}", self.postgres_user, self.postgres_host, self.postgres_dbname),
                 };
@@ -635,15 +659,29 @@ impl App {
     }
 
     fn reopen_db(&mut self) {
-        let path = compose_db_path(&self.db_folder, &self.db_name);
-        match Database::open(&path, self.safe_writes) {
-            Ok(db) => {
+        let spec = match self.current_spec() {
+            Ok(s) => s,
+            Err(e) => { self.status = e; return; }
+        };
+        match Database::open(&spec) {
+            Ok(mut db) => {
+                let count = db.count().unwrap_or(0);
+                let actions = db.distinct_actions().unwrap_or_default();
                 self.db = db;
-                self.db_count = self.db.count().unwrap_or(0);
-                self.known_actions = self.db.distinct_actions().unwrap_or_default();
-                self.status = format!("Opened {path}");
+                self.db_count = count;
+                self.known_actions = actions;
+                self.search_results.clear();
+                self.cross_results.clear();
+                self.selected_actions.clear();
+                self.active_backend = self.backend;
+                self.status = match self.backend {
+                    Backend::Sqlite => format!("Opened SQLite: {}", compose_db_path(&self.db_folder, &self.db_name)),
+                    Backend::Postgres => format!("Connected: {}@{}/{}", self.postgres_user, self.postgres_user, self.postgres_port),
+                };
             }
-            Err(e) => self.status = format!("Error opening {path}: {e:#}")
+            Err(e) => {
+                self.status = format!("Connect failed: {e:#}");
+            }
         }
     }
 }
