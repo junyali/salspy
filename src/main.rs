@@ -375,6 +375,7 @@ impl App {
         });
         if !self.import_paths.is_empty() {
             egui::ScrollArea::vertical()
+                .id_salt("file_list")
                 .max_height(120.0)
                 .show(ui, |ui| {
                     for p in &self.import_paths {
@@ -400,7 +401,7 @@ impl App {
         if also_match && !self.cross_results.is_empty() {
             ui.separator();
             ui.label("Existing users with matching IPs:");
-            results_table(ui, &self.cross_results);
+            results_table(ui, "search_results", &self.cross_results);
         }
     }
 
@@ -415,7 +416,7 @@ impl App {
             }
         });
         ui.separator();
-        results_table(ui, &self.search_results);
+        results_table(ui, "cross_results", &self.search_results);
     }
 
     fn ui_settings(&mut self, ui: &mut egui::Ui) {
@@ -439,9 +440,9 @@ impl App {
     }
 }
 
-fn results_table(ui: &mut egui::Ui, rows: &[ObservationRow]) {
-    egui::ScrollArea::both().show(ui, |ui| {
-        egui::Grid::new("results")
+fn results_table(ui: &mut egui::Ui, id: &str, rows: &[ObservationRow]) {
+    egui::ScrollArea::both().id_salt(id).show(ui, |ui| {
+        egui::Grid::new(id)
             .striped(true)
             .show(ui, |ui| {
                 ui.strong("IP");
