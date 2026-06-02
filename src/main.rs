@@ -151,10 +151,11 @@ impl App {
                         cross_matches,
                         ips_in_file
                     } => {
-                        self.status = format!("Done [{inserted} observations written, {skipped} lines skipped]");
-                        if !cross_matches.is_empty() || ips_in_file > 0 {
-                            self.status.push_str(&format!("X-matched {ips_in_file} unique IPs, {} existing matching found", cross_matches.len()));
+                        let mut s = format!("Done [{inserted} written, {skipped} skipped]");
+                        if ips_in_file > 0 {
+                            s.push_str(&format!(" - {ips_in_file} IPs checked, {} shared with existing users", cross_matches.len()));
                         }
+                        self.status = s;
                         self.cross_results = cross_matches;
                         self.db_count = self.db.count().unwrap_or(self.db_count);
                         done = true;
