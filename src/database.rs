@@ -293,7 +293,7 @@ fn search_ip_postgres(client: &mut PgClient, pattern: &str, actions: &[String]) 
         r#"
         SELECT user_id, MAX(user_name), MAX(user_email), ip, user_agent, MAX(ja3), MIN(first_seen), MAX(last_seen), SUM(hits)
         FROM observations
-        WHERE ip LIKE $1
+        WHERE ip LIKE $1 ESCAPE '\'
         "#,
     );
     let mut params: Vec<&(dyn ToSql + Sync)> = vec![&like];
@@ -334,12 +334,12 @@ fn match_ips_postgres(client: &mut PgClient, ips: &[String], actions: &[String])
     let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
     if !actions.is_empty() {
         let ph: Vec<String> = (0..actions.len()).map(|i| format!("${}", i + 1)).collect();
-        sql.push_str(&format!(" WHERE action IN ({})", ph.join(",")));
+        sql.push_str(&format!(" WHERE o.action IN ({})", ph.join(",")));
         for a in actions {
             params.push(a);
         }
     }
-    sql.push_str(" GROUP BY user_id, ip, user_agent ORDER BY ip, user_id");
+    sql.push_str(" GROUP BY o.user_id, o.ip, o.user_agent ORDER BY o.ip, o.user_id");
 
     let rows = tx.query(sql.as_str(), &params)?;
     let out: Vec<ObservationRow> = rows.iter().map(map_row_postgres).collect();
