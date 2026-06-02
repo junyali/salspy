@@ -40,7 +40,7 @@ impl Database {
                 let sync = if *safe_writes { "NORMAL" } else { "OFF" };
                 conn.pragma_update(None, "synchronous", &sync)?;
                 conn.pragma_update(None, "foreign_keys", &"ON")?;
-                conn.execute_batch(include_str!("../schema_sqlite.sql"))?;
+                conn.execute_batch(SQLITE_SCHEMA)?;
                 Ok(Database::Sqlite(conn))
             }
             DbSpec::Postgres { host, port, user, password, dbname } => {
@@ -246,7 +246,7 @@ fn import_postgres(client: &mut PgClient, obs: &[Observation]) -> Result<usize> 
     let mut tx = client.transaction()?;
     let mut affected = 0usize;
     for o in obs {
-        let seen_rows = tx.query("INSERT INTO seen_events(event_id) VALUES ($1) ON CONFLICT DO NOTHING RETURNING event_id", &[&o.event_id],)?;
+        let seen_rows = tx.query("INSERT INTO seen_events(event_id) VALUES ($1) ON CONFLICT (event_id) DO NOTHING RETURNING event_id", &[&o.event_id],)?;
         if seen_rows.is_empty() {
             continue;
         }
@@ -263,7 +263,7 @@ fn import_postgres(client: &mut PgClient, obs: &[Observation]) -> Result<usize> 
                 user_id, ip, user_agent, action
             )
             DO UPDATE SET
-            hits = observation.hits + 1,
+            hits = observations.hits + 1,
             first_seen = LEAST(observations.first_seen, excluded.first_seen),
             last_seen = GREATEST(observations.last_seen, excluded.last_seen),
             user_name = COALESCE(excluded.user_name, observations.user_name),
@@ -319,7 +319,7 @@ fn match_ips_postgres(client: &mut PgClient, ips: &[String], actions: &[String])
             ",
     )?;
     {
-        let stmt = tx.prepare("INSERT OR IGNORE INTO _needle_ips(ip) VALUES ($1) ON CONFLICT DO NOTHING")?;
+        let stmt = tx.prepare("INSERT _needle_ips(ip) VALUES ($1) ON CONFLICT DO NOTHING")?;
         for ip in ips {
             tx.execute(&stmt, &[ip])?;
         }
