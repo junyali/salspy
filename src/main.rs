@@ -373,8 +373,23 @@ impl App {
                 }
             }
         });
-        for p in &self.import_paths {
-            ui.monospace(p);
+        if !self.import_paths.is_empty() {
+            egui::ScrollArea::vertical()
+                .max_height(120.0)
+                .show(ui, |ui| {
+                    for p in &self.import_paths {
+                        let name = Path::new(p)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| p.clone());
+                        let shown = if name.chars().count() > 48 {
+                            format!("{}...", name.chars().take(47).collect::<String>())
+                        } else {
+                            name
+                        };
+                        ui.monospace(shown).on_hover_text(p);
+                    }
+                });
         }
         let can_run = !self.import_paths.is_empty();
         if ui.add_enabled(can_run, egui::Button::new("Import")).clicked() {
