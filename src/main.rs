@@ -224,7 +224,7 @@ fn run_import(
     let mut aborted = false;
     'outer: for (file_index, path) in paths.iter().enumerate() {
         let bytes_total = metadata(path).map(|m| m.len()).unwrap_or(0);
-        let mut bytes_done = 064;
+        let mut bytes_done = 0u64;
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let mut batch: Vec<model::Observation> = Vec::with_capacity(batch_size);
