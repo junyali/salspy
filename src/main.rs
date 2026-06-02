@@ -40,6 +40,7 @@ enum Msg {
 #[derive(PartialEq, Clone, Copy)]
 enum Backend {
     Sqlite,
+    Postgres,
 }
 
 #[derive(PartialEq)]
@@ -77,12 +78,18 @@ struct App {
     backend: Backend,
     db_folder: String,
     db_name: String,
+    postgres_host: String,
+    postgres_port: String,
+    postgres_user: String,
+    postgres_password: String,
+    postgres_dbname: String,
 }
 
 impl Backend {
     fn label(&self) -> &'static str {
         match self {
             Backend::Sqlite => "SQLite",
+            Backend::Postgres => "PostgreSQL",
         }
     }
 }
@@ -123,6 +130,11 @@ impl App {
             backend: Backend::Sqlite,
             db_folder,
             db_name,
+            postgres_host: "localhost".to_string(),
+            postgres_port: "5432".to_string(),
+            postgres_user: "postgres".to_string(),
+            postgres_password: String::new(),
+            postgres_dbname: "audit".to_string(),
         })
     }
 
@@ -343,7 +355,13 @@ impl eframe::App for App {
                 ui.selectable_value(&mut self.tab, Tab::ImportAndMatch, "Import and X-ref");
                 ui.selectable_value(&mut self.tab, Tab::Settings, "Settings");
                 ui.separator();
-                ui.label(format!("DB Rows: {}", self.db_count));
+                ui.label(format!("Rows: {}", self.db_count));
+                ui.separator();
+                let current = match self.backend {
+                    Backend::Sqlite => format!("SQLite: {}", compose_db_path(&self.db_folder, &self.db_name)),
+                    Backend::Postgres => format!("Postgres: {}@{}/{}", self.postgres_user, self.postgres_host, self.postgres_dbname),
+                };
+                ui.label(current).on_hover_text("Active DB");
             });
         });
 
@@ -472,12 +490,16 @@ impl App {
                 .selected_text(self.backend.label())
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.backend, Backend:: Sqlite, Backend::Sqlite.label());
+                    ui.selectable_value(&mut self.backend, Backend::Postgres, Backend::Postgres.label());
                 });
         });
         ui.add_space(8.0);
 
         match self.backend {
             Backend::Sqlite => {
+                ui.strong("SQLite settings");
+                ui.add_space(4.0);
+
                 ui.label("SQLite DB Location");
                 ui.horizontal(|ui| {
                     if ui.button("Choose directory...").clicked() {
@@ -496,6 +518,9 @@ impl App {
                     ui.label("DB name");
                     ui.text_edit_singleline(&mut self.db_name);
                 });
+                ui.add_space(4.0);
+                ui.checkbox(&mut self.safe_writes, "Safe writes").on_hover_text("Enable synchronised writing (you should probably enable this)");
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     if ui.button("Apply / open").clicked() && !self.busy {
                         self.reopen_db();
@@ -504,10 +529,55 @@ impl App {
                     ui.monospace(preview);
                 });
             }
+            Backend::Postgres => {
+                ui.group(|ui| {
+                    ui.strong("PostgreSQL settings");
+                    ui.add_space(4.0);
+
+                    egui::Grid::new("postgres_settings_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 6.0])
+                        .show(ui, |ui| {
+                            ui.label("Host");
+                            ui.text_edit_singleline(&mut self.postgres_host);
+                            ui.end_row();
+
+                            ui.label("Port");
+                            ui.text_edit_singleline(&mut self.postgres_port);
+                            ui.end_row();
+
+                            ui.label("User");
+                            ui.text_edit_singleline(&mut self.postgres_user);
+                            ui.end_row();
+
+                            ui.label("Password");
+                            ui.add(egui::TextEdit::singleline(&mut self.postgres_password).password(true));
+                            ui.end_row();
+
+                            ui.label("Database");
+                            ui.text_edit_singleline(&mut self.postgres_dbname);
+                            ui.end_row();
+                        });
+
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Apply / connect").clicked() && !self.busy {
+                            self.reopen_db();
+                        }
+
+                        let masked = compose_postgres_connection(
+                            &self.postgres_host,
+                            &self.postgres_port,
+                            &self.postgres_user,
+                            if self.postgres_password.is_empty() { "" } else { "********" },
+                            &self.postgres_dbname
+                        );
+                        ui.monospace(masked);
+                    });
+                });
+            }
         }
 
-        ui.separator();
-        ui.checkbox(&mut self.safe_writes, "Safe writes").on_hover_text("Enable synchronised writing (you should probably enable this)");
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.label("Batch size");
@@ -585,6 +655,18 @@ fn compose_db_path(folder: &str, name: &str) -> String {
     } else {
         Path::new(folder).join(name).to_string_lossy().to_string()
     }
+}
+
+fn compose_postgres_connection(host: &str, port: &str, user: &str, password: &str, dbname: &str) -> String {
+    let host = if host.trim().is_empty() { "localhost" } else { host.trim() };
+    let port = if port.trim().is_empty() { "5432" } else { port.trim() };
+    let user = if user.trim().is_empty() { "postgres" } else { user.trim() };
+    let dbname = if dbname.trim().is_empty() { "audit" } else { dbname.trim() };
+    let mut s = format!("host={host} port={port} user={user} dbname={dbname}");
+    if !password.trim().is_empty() {
+        s.push_str(&format!(" password={}", password.trim()));
+    }
+    s
 }
 
 fn results_table(ui: &mut egui::Ui, id: &str, rows: &[ObservationRow]) {
