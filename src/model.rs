@@ -87,7 +87,9 @@ pub fn entry_to_observations(entry: &AuditEntry) -> Vec<Observation> {
     let user_name = user.and_then(|u| u.name.clone());
     let user_email = user.and_then(|u| u.email.clone());
     let ja3 = entry.details.as_ref().and_then(|d| d.client_ja3_fingerprint.clone());
-    let action = entry.action.clone().unwrap_or_default();
+    let action = match entry.action.as_deref() {
+        Some(a) if !a.trim().is_empty() => a.to_string(), _ => "(none)".to_string(),
+    };
     let ctx = entry.context.as_ref();
     if let Some(ip_raw) = ctx.and_then(|c| c.ip_address.as_ref()) {
         if let Some(ip) = canonical_ip(ip_raw) {

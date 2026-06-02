@@ -182,7 +182,7 @@ impl Database {
     }
 
     pub fn distinct_actions(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare("SELECT DISTINCT action FROM observations WHERE action <> '' ORDER BY action",)?;
+        let mut stmt = self.conn.prepare("SELECT DISTINCT action FROM observations ORDER BY action",)?;
         let rows = stmt
             .query_map([], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
