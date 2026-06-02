@@ -1,6 +1,7 @@
 use crate::model::Observation;
 use anyhow::Result;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, params_from_iter};
+use std::iter::once;
 
 pub struct Database {
     conn: Connection
@@ -49,13 +50,13 @@ impl Database {
             let mut stmt = tx.prepare(
                 r#"
                 INSERT INTO observations (
-                    user_id, user_name, user_email, ip, user_agent, ja3, first_seen, last_seen, hits
+                    user_id, user_name, user_email, ip, user_agent, ja3, action, first_seen, last_seen, hits
                 )
                 VALUES (
-                    ?1, ?2, ?3, ?4, COALESCE(?5, ''), ?6, ?7, ?7, 1
+                    ?1, ?2, ?3, ?4, COALESCE(?5, ''), ?6, ?7, ?8, ?8, 1
                 )
                 ON CONFLICT(
-                    user_id, ip, user_agent
+                    user_id, ip, user_agent, action
                 )
                 DO UPDATE SET
                 hits = hits + 1,
@@ -83,6 +84,7 @@ impl Database {
                     o.ip,
                     o.user_agent,
                     o.ja3,
+                    o.action,
                     o.seen_at,
                 ])?;
                 affected += 1;
@@ -92,7 +94,7 @@ impl Database {
         Ok(affected)
     }
 
-    pub fn search_ip(&self, pattern: &str) -> Result<Vec<ObservationRow>> {
+    pub fn search_ip(&self, pattern: &str, actions: &[String]) -> Result<Vec<ObservationRow>> {
         let pattern = pattern.trim();
         if pattern.is_empty() {
             return Ok(Vec::new());
@@ -101,19 +103,28 @@ impl Database {
         let escaped = escape_like(pattern);
         let like = format!("{escaped}%");
 
-        let sql = r#"
-        SELECT user_id, user_name, user_email, ip, user_agent, ja3, first_seen, last_seen, hits
+        let mut sql = String::from(
+        r#"
+        SELECT user_id, MAX(user_name), MAX(user_email), ip, user_agent, MAX(ja3), MIN(first_seen), MAX(last_seen), SUM(hits)
         FROM observations
         WHERE ip like ?1 ESCAPE '\'
-        ORDER BY ip, user_id
-        "#;
+        "#,
+        );
+        if !actions.is_empty() {
+            let placeholders = vec!["?"; actions.len()].join(",");
+            sql.push_str(&format!(" AND action IN ({placeholders})"));
+        }
+        sql.push_str(" GROUP BY user_id, ip, user_agent ORDER BY ip, user_id");
 
-        let mut stmt = self.conn.prepare(sql)?;
-        let rows = stmt.query_map(params![like], Self::map_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params_iter = once(like).chain(actions.iter().cloned());
+        let rows = stmt
+            .query_map(params_from_iter(params_iter), Self::map_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
 
-    pub fn match_ips(&self, ips: &[String]) -> Result<Vec<ObservationRow>> {
+    pub fn match_ips(&self, ips: &[String], actions: &[String]) -> Result<Vec<ObservationRow>> {
         if ips.is_empty() {
             return Ok(Vec::new());
         }
@@ -131,15 +142,22 @@ impl Database {
                 ins.execute(params![ip])?;
             }
         }
-        let mut stmt = tx.prepare(
+        let mut sql = String::from(
             r#"
-            SELECT o.user_id, o.user_name, o.user_email, o.ip, o.user_agent, o.ja3, o.first_seen, o.last_seen, o.hits
+            SELECT o.user_id, MAX(o.user_name), MAX(o.user_email), o.ip, o.user_agent, MAX(o.ja3), MIN(o.first_seen), MAX(o.last_seen), SUM(o.hits)
             FROM observations o
             JOIN _needle_ips n ON o.ip = n.ip
-            ORDER BY o.ip, o.user_id
             "#,
-        )?;
-        let rows = stmt.query_map([], Self::map_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        );
+        if !actions.is_empty() {
+            let placeholders = vec!["?"; actions.len()].join(",");
+            sql.push_str(&format!(" WHERE o.action IN ({placeholders})"));
+        }
+        sql.push_str(" GROUP BY o.user_id, o.ip, o.user_agent ORDER BY o.ip, o.user_id");
+        let mut stmt = tx.prepare(&sql)?;
+        let rows = stmt
+            .query_map(params_from_iter(actions.iter().cloned()), Self::map_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(stmt);
         tx.commit()?;
         Ok(rows)
@@ -161,6 +179,14 @@ impl Database {
             last_seen: r.get(7)?,
             hits: r.get(8)?,
         })
+    }
+
+    pub fn distinct_actions(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT action FROM observations WHERE action <> '' ORDER BY action",)?;
+        let rows = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 }
 

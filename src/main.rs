@@ -10,6 +10,7 @@ use std::fs::{File, copy, metadata};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path;
+use std::thread::spawn;
 
 const DB_PATH: &str = "audit.db";
 
@@ -61,6 +62,8 @@ struct App {
     search_query: String,
     search_results: Vec<ObservationRow>,
     cross_results: Vec<ObservationRow>,
+    known_actions: Vec<String>,
+    selected_actions: HashSet<String>,
     db_count: i64,
     safe_writes: bool,
     batch_size: usize,
@@ -72,6 +75,7 @@ impl App {
         let safe_writes = true;
         let db = Database::open(DB_PATH, safe_writes)?;
         let db_count = db.count().unwrap_or(0);
+        let known_actions = db.distinct_actions().unwrap_or_default();
         Ok(App {
             db,
             tab: Tab::Import,
@@ -90,6 +94,8 @@ impl App {
             search_query: String::new(),
             search_results: Vec::new(),
             cross_results: Vec::new(),
+            known_actions,
+            selected_actions: HashSet::new(),
             db_count,
             safe_writes,
             batch_size: 10_000,
@@ -114,8 +120,9 @@ impl App {
         let cancel = self.cancel.clone();
         let safe_writes = self.safe_writes;
         let batch_size = self.batch_size;
-        std::thread::spawn(move || {
-            let result = run_import(&paths, also_match, safe_writes, batch_size, &cancel, &tx, &ctx);
+        let actions: Vec<String> = self.selected_actions.iter().cloned().collect();
+        spawn(move || {
+            let result = run_import(&paths, also_match, safe_writes, batch_size, &actions, &cancel, &tx, &ctx);
             if let Err(e) = result {
                 let _ = tx.send(Msg::Error(format!("{e:#}")));
                 ctx.request_repaint();
@@ -158,6 +165,7 @@ impl App {
                         self.status = s;
                         self.cross_results = cross_matches;
                         self.db_count = self.db.count().unwrap_or(self.db_count);
+                        self.known_actions = self.db.distinct_actions().unwrap_or_default();
                         done = true;
                     }
                     Msg::Aborted {
@@ -165,6 +173,7 @@ impl App {
                     } => {
                         self.status = format!("Stopped [{inserted} written]");
                         self.db_count = self.db.count().unwrap_or(self.db_count);
+                        self.known_actions = self.db.distinct_actions().unwrap_or_default();
                         done = true;
                     }
                     Msg::Error(e) => {
@@ -181,7 +190,8 @@ impl App {
     }
 
     fn run_search(&mut self) {
-        match self.db.search_ip(&self.search_query) {
+        let actions: Vec<String> = self.selected_actions.iter().cloned().collect();
+        match self.db.search_ip(&self.search_query, &actions) {
             Ok(rows) => {
                 self.status = format!("{} matching", rows.len());
                 self.search_results = rows;
@@ -196,6 +206,7 @@ fn run_import(
     also_match: bool,
     safe_writes: bool,
     batch_size: usize,
+    actions: &[String],
     cancel: &Arc<AtomicBool>,
     tx: &Sender<Msg>,
     ctx: &egui::Context,
@@ -279,7 +290,7 @@ fn run_import(
 
     let cross_matches = if also_match {
         let ips: Vec<String> = file_ips.iter().cloned().collect();
-        db.match_ips(&ips)?
+        db.match_ips(&ips, actions)?
     } else {
         Vec::new()
     };
@@ -392,6 +403,9 @@ impl App {
                     }
                 });
         }
+        if also_match {
+            self.ui_action_filter(ui);
+        }
         let can_run = !self.import_paths.is_empty();
         if ui.add_enabled(can_run, egui::Button::new("Import")).clicked() {
             self.cross_results.clear();
@@ -415,6 +429,10 @@ impl App {
                 self.run_search();
             }
         });
+        self.ui_action_filter(ui);
+        if ui.button("Apply filter").clicked() {
+            self.run_search();
+        }
         ui.separator();
         results_table(ui, "cross_results", &self.search_results);
     }
@@ -437,6 +455,47 @@ impl App {
                 self.batch_size += 1;
             }
         });
+    }
+
+    fn ui_action_filter(&mut self, ui: &mut egui::Ui) {
+        if self.known_actions.is_empty() {
+            return;
+        }
+
+        egui::CollapsingHeader::new(format!(
+            "Actions ({} selected)",
+            if self.selected_actions.is_empty() {
+                "all".to_string()
+            } else {
+                self.selected_actions.len().to_string()
+            }
+        ))
+            .id_salt("action_filter")
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.small_button("All").clicked() {
+                        self.selected_actions.clone();
+                    }
+                    if ui.small_button("None").clicked() {
+                        self.selected_actions = self.known_actions.iter().cloned().collect();
+                    }
+                });
+                egui::ScrollArea::vertical()
+                    .id_salt("action_filter_scroll")
+                    .max_height(160.0)
+                    .show(ui, |ui| {
+                        for action in &self.known_actions {
+                            let mut on = self.selected_actions.contains(action);
+                            if ui.checkbox(&mut on, action).changed() {
+                                if on {
+                                    self.selected_actions.insert(action.clone());
+                                } else {
+                                    self.selected_actions.remove(action);
+                                }
+                            }
+                        }
+                    })
+            });
     }
 }
 

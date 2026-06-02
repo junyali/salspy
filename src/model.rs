@@ -64,6 +64,7 @@ pub struct Observation {
     pub ip: String,
     pub user_agent: Option<String>,
     pub ja3: Option<String>,
+    pub action: String,
     pub seen_at: Option<i64>,
 }
 
@@ -86,6 +87,7 @@ pub fn entry_to_observations(entry: &AuditEntry) -> Vec<Observation> {
     let user_name = user.and_then(|u| u.name.clone());
     let user_email = user.and_then(|u| u.email.clone());
     let ja3 = entry.details.as_ref().and_then(|d| d.client_ja3_fingerprint.clone());
+    let action = entry.action.clone().unwrap_or_default();
     let ctx = entry.context.as_ref();
     if let Some(ip_raw) = ctx.and_then(|c| c.ip_address.as_ref()) {
         if let Some(ip) = canonical_ip(ip_raw) {
@@ -97,6 +99,7 @@ pub fn entry_to_observations(entry: &AuditEntry) -> Vec<Observation> {
                 ip,
                 user_agent: ctx.and_then(|c| c.ua.clone()),
                 ja3: ja3.clone(),
+                action: action.clone(),
                 seen_at: entry.date_create
             });
         }
@@ -112,6 +115,7 @@ pub fn entry_to_observations(entry: &AuditEntry) -> Vec<Observation> {
                     ip,
                     user_agent: details.previous_ua.clone(),
                     ja3,
+                    action,
                     seen_at: entry.date_create,
                 });
             }
