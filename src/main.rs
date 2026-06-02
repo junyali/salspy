@@ -615,6 +615,33 @@ impl App {
                 self.batch_size += 1;
             }
         });
+        ui.add_space(8.0);
+        if !self.confirm_clear {
+            if ui.button("Clear DB").clicked() && !self.busy {
+                self.confirm_clear = true;
+            }
+        } else {
+            ui.horizontal(|ui| {
+                ui.label("Delete ALL rows?");
+                if ui.button("Yes").clicked() {
+                    match self.db.clear() {
+                        Ok(()) => {
+                            self.db_count = self.db.count().unwrap_or(0);
+                            self.known_actions = self.db.distinct_actions().unwrap_or_default();
+                            self.search_results.clear();
+                            self.cross_results.clear();
+                            self.selected_actions.clear();
+                            self.status = "DB cleared".into();
+                        }
+                        Err(e) => self.status = format!("Clear failed: {e:#}"),
+                    }
+                    self.confirm_clear = false;
+                }
+                if ui.button("Cancel").clicked() {
+                    self.confirm_clear = false;
+                }
+            });
+        }
     }
 
     fn ui_action_filter(&mut self, ui: &mut egui::Ui) {
