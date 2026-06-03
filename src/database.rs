@@ -3,6 +3,9 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection, params_from_iter};
 use postgres::{Client as PgClient, NoTls, types::ToSql};
 use std::iter::once;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct ObservationRow {
@@ -68,10 +71,10 @@ impl Database {
         Ok(())
     }
 
-    pub fn import(&mut self, obs: &[Observation]) -> Result<usize> {
+    pub fn import(&mut self, obs: &[Observation], cancel: &Arc<AtomicBool>) -> Result<usize> {
         match self {
             Database::Sqlite(conn) => import_sqlite(conn, obs),
-            Database::Postgres(client) => import_postgres(client, obs),
+            Database::Postgres(client) => import_postgres(client, obs, cancel),
         }
     }
 
@@ -242,23 +245,60 @@ fn map_row_sqlite(r: &rusqlite::Row) -> rusqlite::Result<ObservationRow> {
     })
 }
 
-fn import_postgres(client: &mut PgClient, obs: &[Observation]) -> Result<usize> {
+fn import_postgres(client: &mut PgClient, obs: &[Observation], cancel: &Arc<AtomicBool>,) -> Result<usize> {
     let mut tx = client.transaction()?;
-    let mut affected = 0usize;
-    for o in obs {
-        let seen_rows = tx.query("INSERT INTO seen_events(event_id) VALUES ($1) ON CONFLICT (event_id) DO NOTHING RETURNING event_id", &[&o.event_id],)?;
-        if seen_rows.is_empty() {
-            continue;
-        }
-        let ua: Option<&str> = o.user_agent.as_deref();
-        tx.execute(
+    let event_ids: Vec<&str> = obs.iter().map(|o| o.event_id.as_str()).collect();
+    let new_ids: HashSet<String> = tx
+        .query(
+            "INSERT INTO seen_events(event_id) \
+            SELECT * FROM unnest($1::text[]) \
+            ON CONFLICT (event_id) DO NOTHING \
+            RETURNING event_id",
+            &[&event_ids],
+        )?
+        .iter()
+        .map(|r| r.get::<_, String>(0))
+        .collect();
+
+    if cancel.load(Ordering::Relaxed) {
+        tx.rollback()?;
+        return Ok(0);
+    }
+
+    let fresh: Vec<&Observation> = obs
+        .iter()
+        .filter(|o| new_ids.contains(&o.event_id))
+        .collect();
+
+    if fresh.is_empty() {
+        tx.commit()?;
+        return Ok(0);
+    }
+
+    let user_id: Vec<&str> = fresh.iter().map(|o| o.user_id.as_str()).collect();
+    let user_name: Vec<Option<&str>> = fresh.iter().map(|o| o.user_name.as_deref()).collect();
+    let user_email: Vec<Option<&str>> = fresh.iter().map(|o| o.user_email.as_deref()).collect();
+    let ip: Vec<&str> = fresh.iter().map(|o| o.ip.as_str()).collect();
+    let user_agent: Vec<&str> = fresh.iter().map(|o| o.user_agent.as_deref().unwrap_or("")).collect();
+    let ja3: Vec<Option<&str>> = fresh.iter().map(|o| o.ja3.as_deref()).collect();
+    let action: Vec<&str> = fresh.iter().map(|o| o.action.as_str()).collect();
+    let seen_at: Vec<Option<i64>> = fresh.iter().map(|o| o.seen_at).collect();
+    tx.execute(
         r#"
             INSERT INTO observations (
                 user_id, user_name, user_email, ip, user_agent, ja3, action, first_seen, last_seen, hits
             )
-            VALUES (
-                $1, $2, $3, $4, COALESCE($5, ''), $6, $7, $8, $8, 1
-            )
+            SELECT user_id, user_name, user_email, ip, user_agent, ja3, action, seen_at, seen_at, 1
+            FROM unnest (
+                $1::text[],
+                $2::text[],
+                $3::text[],
+                $4::text[],
+                $5::text[],
+                $6::text[],
+                $7::text[],
+                $8::bigint[]
+            ) AS t(user_id, user_name, user_email, ip, user_agent, ja3, action, seen_at)
             ON CONFLICT(
                 user_id, ip, user_agent, action
             )
@@ -270,21 +310,19 @@ fn import_postgres(client: &mut PgClient, obs: &[Observation]) -> Result<usize> 
             user_email = COALESCE(excluded.user_email, observations.user_email),
             ja3 = COALESCE(excluded.ja3, observations.ja3)
             "#,
-            &[
-                &o.user_id,
-                &o.user_name,
-                &o.user_email,
-                &o.ip,
-                &ua,
-                &o.ja3,
-                &o.action,
-                &o.seen_at,
-            ],
-        )?;
-        affected += 1;
-    }
+        &[
+            &user_id,
+            &user_name,
+            &user_email,
+            &ip,
+            &user_agent,
+            &ja3,
+            &action,
+            &seen_at,
+        ],
+    )?;
     tx.commit()?;
-    Ok(affected)
+    Ok(fresh.len())
 }
 
 fn search_ip_postgres(client: &mut PgClient, pattern: &str, actions: &[String]) -> Result<Vec<ObservationRow>> {

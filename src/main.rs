@@ -314,7 +314,7 @@ fn run_import(
                 Err(_) => skipped += 1,
             }
             if batch.len() >= batch_size {
-                inserted += db.import(&batch)?;
+                inserted += db.import(&batch, cancel)?;
                 batch.clear();
                 let _ = tx.send(Msg::Progress {
                     bytes_done,
@@ -329,7 +329,7 @@ fn run_import(
             }
         }
         if !batch.is_empty() {
-            inserted += db.import(&batch)?;
+            inserted += db.import(&batch, cancel)?;
         }
         let _ = tx.send(Msg::Progress {
             bytes_done: bytes_total,
