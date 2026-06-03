@@ -5,7 +5,7 @@ use postgres::{Client as PgClient, NoTls, types::ToSql};
 use std::iter::once;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 
 #[derive(Debug, Clone)]
 pub struct ObservationRow {
@@ -245,7 +245,7 @@ fn map_row_sqlite(r: &rusqlite::Row) -> rusqlite::Result<ObservationRow> {
     })
 }
 
-fn import_postgres(client: &mut PgClient, obs: &[Observation], cancel: &Arc<AtomicBool>,) -> Result<usize> {
+fn import_postgres(client: &mut PgClient, obs: &[Observation], cancel: &Arc<AtomicBool>) -> Result<usize> {
     let mut tx = client.transaction()?;
     let event_ids: Vec<&str> = obs.iter().map(|o| o.event_id.as_str()).collect();
     let new_ids: HashSet<String> = tx
@@ -275,20 +275,75 @@ fn import_postgres(client: &mut PgClient, obs: &[Observation], cancel: &Arc<Atom
         return Ok(0);
     }
 
-    let user_id: Vec<&str> = fresh.iter().map(|o| o.user_id.as_str()).collect();
-    let user_name: Vec<Option<&str>> = fresh.iter().map(|o| o.user_name.as_deref()).collect();
-    let user_email: Vec<Option<&str>> = fresh.iter().map(|o| o.user_email.as_deref()).collect();
-    let ip: Vec<&str> = fresh.iter().map(|o| o.ip.as_str()).collect();
-    let user_agent: Vec<&str> = fresh.iter().map(|o| o.user_agent.as_deref().unwrap_or("")).collect();
-    let ja3: Vec<Option<&str>> = fresh.iter().map(|o| o.ja3.as_deref()).collect();
-    let action: Vec<&str> = fresh.iter().map(|o| o.action.as_str()).collect();
-    let seen_at: Vec<Option<i64>> = fresh.iter().map(|o| o.seen_at).collect();
+    struct Agg {
+        user_name: Option<String>,
+        user_email: Option<String>,
+        ja3: Option<String>,
+        first_seen: Option<i64>,
+        last_seen: Option<i64>,
+        hits: i64,
+    }
+
+    let mut map: HashMap<(String, String, String, String), Agg> = HashMap::new();
+    for o in &fresh {
+        let ua = o.user_agent.clone().unwrap_or_default();
+        let key = (o.user_id.clone(), o.ip.clone(), ua, o.action.clone());
+        let e = map.entry(key).or_insert(Agg {
+            user_name: None,
+            user_email: None,
+            ja3: None,
+            first_seen: None,
+            last_seen: None,
+            hits: 0,
+        });
+        e.hits += 1;
+        if e.user_name.is_none() { e.user_name = o.user_name.clone(); }
+        if e.user_email.is_none() { e.user_email = o.user_email.clone(); }
+        if e.ja3.is_none() { e.ja3 = o.ja3.clone(); }
+        match (e.first_seen, o.seen_at) {
+            (None, s) => e.first_seen = s,
+            (Some(cur), Some(s)) if s < cur => e.first_seen = Some(s),
+            _ => {}
+        }
+        match (e.last_seen, o.seen_at) {
+            (None, s) => e.last_seen = s,
+            (Some(cur), Some(s)) if s > cur => e.last_seen = Some(s),
+            _ => {}
+        }
+    }
+
+    let mut user_id: Vec<&str> = Vec::with_capacity(map.len());
+    let mut ip: Vec<&str> = Vec::with_capacity(map.len());
+    let mut user_agent: Vec<&str> = Vec::with_capacity(map.len());
+    let mut action: Vec<&str> = Vec::with_capacity(map.len());
+    let mut user_name: Vec<Option<&str>> = Vec::with_capacity(map.len());
+    let mut user_email: Vec<Option<&str>> = Vec::with_capacity(map.len());
+    let mut ja3: Vec<Option<&str>> = Vec::with_capacity(map.len());
+    let mut first_seen: Vec<Option<i64>> = Vec::with_capacity(map.len());
+    let mut last_seen: Vec<Option<i64>> = Vec::with_capacity(map.len());
+    let mut hits: Vec<i64> = Vec::with_capacity(map.len());
+
+    for (key, agg) in &map {
+        user_id.push(key.0.as_str());
+        ip.push(key.1.as_str());
+        user_agent.push(key.2.as_str());
+        action.push(key.3.as_str());
+        user_name.push(agg.user_name.as_deref());
+        user_email.push(agg.user_email.as_deref());
+        ja3.push(agg.ja3.as_deref());
+        first_seen.push(agg.first_seen);
+        last_seen.push(agg.last_seen);
+        hits.push(agg.hits);
+    }
+
+    let affected = map.len();
+
     tx.execute(
         r#"
             INSERT INTO observations (
                 user_id, user_name, user_email, ip, user_agent, ja3, action, first_seen, last_seen, hits
             )
-            SELECT user_id, user_name, user_email, ip, user_agent, ja3, action, seen_at, seen_at, 1
+            SELECT user_id, user_name, user_email, ip, user_agent, ja3, action, first_seen, last_seen, hits
             FROM unnest (
                 $1::text[],
                 $2::text[],
@@ -297,13 +352,15 @@ fn import_postgres(client: &mut PgClient, obs: &[Observation], cancel: &Arc<Atom
                 $5::text[],
                 $6::text[],
                 $7::text[],
-                $8::bigint[]
-            ) AS t(user_id, user_name, user_email, ip, user_agent, ja3, action, seen_at)
+                $8::bigint[],
+                $9::bigint[],
+                $10::bigint[]
+            ) AS t(user_id, user_name, user_email, ip, user_agent, ja3, action, first_seen, last_seen, hits)
             ON CONFLICT(
                 user_id, ip, user_agent, action
             )
             DO UPDATE SET
-            hits = observations.hits + 1,
+            hits = observations.hits + excluded.hits,
             first_seen = LEAST(observations.first_seen, excluded.first_seen),
             last_seen = GREATEST(observations.last_seen, excluded.last_seen),
             user_name = COALESCE(excluded.user_name, observations.user_name),
@@ -318,11 +375,13 @@ fn import_postgres(client: &mut PgClient, obs: &[Observation], cancel: &Arc<Atom
             &user_agent,
             &ja3,
             &action,
-            &seen_at,
+            &first_seen,
+            &last_seen,
+            &hits,
         ],
     )?;
     tx.commit()?;
-    Ok(fresh.len())
+    Ok(affected)
 }
 
 fn search_ip_postgres(client: &mut PgClient, pattern: &str, actions: &[String]) -> Result<Vec<ObservationRow>> {
@@ -357,7 +416,7 @@ fn match_ips_postgres(client: &mut PgClient, ips: &[String], actions: &[String])
             ",
     )?;
     {
-        let stmt = tx.prepare("INSERT _needle_ips(ip) VALUES ($1) ON CONFLICT DO NOTHING")?;
+        let stmt = tx.prepare("INSERT INTO _needle_ips(ip) VALUES ($1) ON CONFLICT DO NOTHING")?;
         for ip in ips {
             tx.execute(&stmt, &[ip])?;
         }
