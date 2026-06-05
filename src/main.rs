@@ -1,5 +1,6 @@
 mod database;
 mod model;
+mod settings;
 
 use database::{Database, DbSpec, ObservationRow};
 use eframe::egui;
