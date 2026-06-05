@@ -388,7 +388,7 @@ fn search_ip_postgres(client: &mut PgClient, pattern: &str, actions: &[String]) 
     let like = format!("{}%", escape_like(pattern));
     let mut sql = String::from(
         r#"
-        SELECT user_id, MAX(user_name), MAX(user_email), ip, user_agent, MAX(ja3), MIN(first_seen), MAX(last_seen), SUM(hits)
+        SELECT user_id, MAX(user_name), MAX(user_email), ip, user_agent, MAX(ja3), MIN(first_seen), MAX(last_seen), SUM(hits)::bigint
         FROM observations
         WHERE ip LIKE $1 ESCAPE '\'
         "#,
@@ -423,7 +423,7 @@ fn match_ips_postgres(client: &mut PgClient, ips: &[String], actions: &[String])
     }
     let mut sql = String::from(
         r#"
-            SELECT o.user_id, MAX(o.user_name), MAX(o.user_email), o.ip, o.user_agent, MAX(o.ja3), MIN(o.first_seen), MAX(o.last_seen), SUM(o.hits)
+            SELECT o.user_id, MAX(o.user_name), MAX(o.user_email), o.ip, o.user_agent, MAX(o.ja3), MIN(o.first_seen), MAX(o.last_seen), SUM(o.hits)::bigint
             FROM observations o
             JOIN _needle_ips n ON o.ip = n.ip
             "#,
