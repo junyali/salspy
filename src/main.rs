@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path;
 use std::thread::spawn;
 use rfd::FileDialog;
+use settings::Settings;
 
 const DEFAULT_DB_NAME: &str = "audit.db";
 
@@ -85,6 +86,7 @@ struct App {
     postgres_user: String,
     postgres_password: String,
     postgres_dbname: String,
+    last_saved: Settings,
 }
 
 impl Backend {
@@ -98,13 +100,43 @@ impl Backend {
 
 impl App {
     fn new() -> anyhow::Result<Self> {
-        let safe_writes = true;
-        let db_folder = String::new();
-        let db_name = DEFAULT_DB_NAME.to_string();
-        let spec = DbSpec::Sqlite { path: compose_db_path(&db_folder, &db_name), safe_writes };
-        let mut db = Database::open(&spec)?;
+        let cfg = Settings::load();
+        let postgres_password = Settings::load_password();
+        let backend = match cfg.backend.as_str() {
+            "sqlite" => Backend::Sqlite,
+            "postgres" => Backend::Postgres,
+            _ => Backend::Sqlite,
+        };
+        let spec = match backend {
+            Backend::Sqlite => DbSpec::Sqlite {
+                path: compose_db_path(&cfg.db_folder, &cfg.db_name),
+                safe_writes: cfg.safe_writes,
+            },
+            Backend::Postgres => {
+                let port = cfg.postgres_port.trim().parse().unwrap_or(5432);
+                DbSpec::Postgres {
+                    host: cfg.postgres_host.clone(),
+                    port,
+                    user: cfg.postgres_user.clone(),
+                    password: postgres_password.clone(),
+                    dbname: cfg.postgres_dbname.clone(),
+                }
+            }
+        };
+        let (mut db, active_backend, status) = match Database::open(&spec) {
+            Ok(db) => (db, backend, String::new()),
+            Err(e) => {
+                let fallback = DbSpec::Sqlite {
+                    path: compose_db_path(&cfg.db_folder, &cfg.db_name),
+                    safe_writes: cfg.safe_writes,
+                };
+                let db = Database::open(&fallback)?;
+                (db, Backend::Sqlite, format!("Saved backend failed, opened SQLite: {e:#}"))
+            }
+        };
         let db_count = db.count().unwrap_or(0);
         let known_actions = db.distinct_actions().unwrap_or_default();
+        let last_saved = cfg.clone();
         Ok(App {
             db,
             tab: Tab::Import,
@@ -123,21 +155,22 @@ impl App {
             search_query: String::new(),
             search_results: Vec::new(),
             cross_results: Vec::new(),
+            db_count,
+            safe_writes: cfg.safe_writes,
+            batch_size: cfg.batch_size,
+            confirm_clear: false,
             known_actions,
             selected_actions: HashSet::new(),
-            db_count,
-            safe_writes,
-            batch_size: 10_000,
-            confirm_clear: false,
-            backend: Backend::Sqlite,
-            active_backend: Backend::Sqlite,
-            db_folder,
-            db_name,
-            postgres_host: "localhost".to_string(),
-            postgres_port: "5432".to_string(),
-            postgres_user: "postgres".to_string(),
-            postgres_password: String::new(),
-            postgres_dbname: "audit".to_string(),
+            backend,
+            active_backend,
+            db_folder: cfg.db_folder,
+            db_name: cfg.db_name,
+            postgres_host: cfg.postgres_host,
+            postgres_port: cfg.postgres_port,
+            postgres_user: cfg.postgres_user,
+            postgres_password,
+            postgres_dbname: cfg.postgres_dbname,
+            last_saved,
         })
     }
 
@@ -259,6 +292,33 @@ impl App {
             }
         }
     }
+
+    fn current_settings(&self) -> Settings {
+        Settings {
+            backend: match self.backend {
+                Backend::Sqlite => "sqlite".to_string(),
+                Backend::Postgres => "postgres".to_string(),
+            },
+            db_folder: self.db_folder.clone(),
+            db_name: self.db_name.clone(),
+            safe_writes: self.safe_writes,
+            batch_size: self.batch_size,
+            postgres_host: self.postgres_host.clone(),
+            postgres_port: self.postgres_port.clone(),
+            postgres_user: self.postgres_user.clone(),
+            postgres_dbname: self.postgres_dbname.clone(),
+        }
+    }
+
+    fn autosave_if_changed(&mut self) {
+        let now = self.current_settings();
+        if now != self.last_saved {
+            match now.save() {
+                Ok(()) => self.last_saved = now,
+                Err(e) => self.status = e,
+            }
+        }
+    }
 }
 
 fn run_import(
@@ -370,6 +430,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.busy {
             self.poll_worker();
+            self.autosave_if_changed();
             ctx.request_repaint();
         }
 
@@ -702,6 +763,11 @@ impl App {
                 self.cross_results.clear();
                 self.selected_actions.clear();
                 self.active_backend = self.backend;
+                if self.backend == Backend::Postgres {
+                    if let Err(e) = Settings::save_password(&self.postgres_password) {
+                        self.status = format!("Connected, but password not saved: {e}");
+                    }
+                }
                 self.status = match self.backend {
                     Backend::Sqlite => format!("Opened SQLite: {}", compose_db_path(&self.db_folder, &self.db_name)),
                     Backend::Postgres => format!("Connected: {}@{}/{}", self.postgres_user, self.postgres_host, self.postgres_dbname),
