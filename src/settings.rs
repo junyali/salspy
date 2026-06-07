@@ -62,7 +62,7 @@ impl Settings {
 
     pub fn load_password() -> String {
         match keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
-            Ok(entry) => entry.get_password().unwrap(),
+            Ok(entry) => entry.get_password().unwrap_or_default(),
             Err(_) => String::new(),
         }
     }
