@@ -775,14 +775,15 @@ impl App {
                 self.cross_results.clear();
                 self.selected_actions.clear();
                 self.active_backend = self.backend;
+                let mut pw_warning = String::new();
                 if self.backend == Backend::Postgres {
                     if let Err(e) = Settings::save_password(&self.postgres_password) {
-                        self.status = format!("Connected, but password not saved: {e}");
+                        pw_warning = format!(" (password not saved: {e})");
                     }
                 }
                 self.status = match self.backend {
                     Backend::Sqlite => format!("Opened SQLite: {}", compose_db_path(&self.db_folder, &self.db_name)),
-                    Backend::Postgres => format!("Connected: {}@{}/{}", self.postgres_user, self.postgres_host, self.postgres_dbname),
+                    Backend::Postgres => format!("Connected: {}@{}/{}{pw_warning}", self.postgres_user, self.postgres_host, self.postgres_dbname),
                 };
             }
             Err(e) => {
