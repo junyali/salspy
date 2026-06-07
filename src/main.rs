@@ -4,6 +4,7 @@ mod settings;
 
 use database::{Database, DbSpec, ObservationRow};
 use eframe::egui;
+use eframe::glow::Context;
 use std::sync::mpsc::{Receiver, Sender};
 use std::io::{BufRead, BufReader};
 use std::collections::HashSet;
@@ -151,7 +152,7 @@ impl App {
             progress_written: 0,
             progress_file_index: 0,
             progress_file_count: 0,
-            status: String::new(),
+            status,
             search_query: String::new(),
             search_results: Vec::new(),
             cross_results: Vec::new(),
@@ -430,9 +431,10 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.busy {
             self.poll_worker();
-            self.autosave_if_changed();
             ctx.request_repaint();
         }
+
+        self.autosave_if_changed();
 
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -481,6 +483,16 @@ impl eframe::App for App {
             Tab::Search => self.ui_search(ui),
             Tab::Settings => self.ui_settings(ui),
         });
+    }
+
+    fn on_exit(&mut self, _gl: Option<&Context>) {
+        let now = self.current_settings();
+        if now != self.last_saved {
+            let _ = now.save();
+        }
+        if self.active_backend == Backend::Postgres {
+            let _ = Settings::save_password(&self.postgres_password);
+        }
     }
 }
 
@@ -670,7 +682,7 @@ impl App {
             ui.add(
                 egui::DragValue::new(&mut self.batch_size).range(1..=1_000_000).speed(1.0),
             );
-            if ui.small_button("-").clicked() && self.batch_size > 0 {
+            if ui.small_button("-").clicked() && self.batch_size > 1 {
                 self.batch_size -= 1;
             }
             if ui.small_button("+").clicked() && self.batch_size < 1_000_000 {
