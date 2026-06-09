@@ -14,4 +14,4 @@ rfd = "0.17.2"
 postgres = "0.19.13"
 dirs = "6.0.0"
 toml = "1.1.2+spec-1.1.0"
-keyring = "3.6.3"
+keyring = { version = "3.6.3", features = ["windows-native", "apple-native", "linux-native"]}
