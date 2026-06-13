@@ -1,7 +1,6 @@
-[package]
-name = "salgui"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = ["salspy-core"]
+resolver = "2"
 
 [dependencies]
 eframe = "0.33.3"

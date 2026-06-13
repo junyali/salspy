@@ -20,8 +20,8 @@ pub struct ObservationRow {
     pub hits: i64,
 }
 
-const SQLITE_SCHEMA: &str = include_str!("../schema_sqlite.sql");
-const PG_SCHEMA: &str = include_str!("../schema_postgres.sql");
+const SQLITE_SCHEMA: &str = include_str!("../../schemas/schema_sqlite.sql");
+const PG_SCHEMA: &str = include_str!("../../schemas/schema_pg.sql");
 
 #[derive(Clone)]
 pub enum DbSpec {
