@@ -730,7 +730,7 @@ fn results_table(ui: &mut egui::Ui, id: &str, rows: &[ObservationRow]) {
 fn main() -> eframe::Result<()> {
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
-        "SALGUI",
+        "salSPY",
         native_options,
         Box::new(|_cc| {
             let app = App::new().expect("failed to open db");
