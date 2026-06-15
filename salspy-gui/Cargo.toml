@@ -1,0 +1,18 @@
+[package]
+name = "salspy-gui"
+version = "1.0.0"
+authors = ["junyali"]
+license = "MIT"
+edition = "2024"
+repository = "https://github.com/junyali/salspy"
+
+[[bin]]
+name = "salspy-gui"
+path = "src/main.rs"
+
+[dependencies]
+salspy-core = { path = "../salspy-core" }
+anyhow = "1.0.102"
+eframe = "0.33.3"
+egui = "0.34.3"
+rfd = "0.17.2"

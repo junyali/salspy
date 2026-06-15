@@ -2,21 +2,20 @@ use crate::database::{Database, DbSpec, ObservationRow};
 use crate::model;
 use std::collections::HashSet;
 use std::fs::{copy, metadata, File};
-use std::io::BufReader;
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
 
 #[derive(Debug, Clone)]
 pub struct ImportProgress {
-    bytes_done: u64,
-    bytes_total: u64,
-    parsed: usize,
-    skipped: usize,
-    written: usize,
-    file_index: usize,
-    file_count: usize,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub parsed: usize,
+    pub skipped: usize,
+    pub written: usize,
+    pub file_index: usize,
+    pub file_count: usize,
 }
 
 #[derive(Debug)]
@@ -36,12 +35,11 @@ pub fn run_import(
     paths: &[String],
     also_match: bool,
     batch_size: usize,
-    spec: DbSpec,
+    spec: &DbSpec,
     actions: &[String],
     cancel: &Arc<AtomicBool>,
-    tx: &Sender<Msg>,
-    ctx: &egui::Context,
-) -> anyhow::Result<()> {
+    on_progress: &dyn Fn(&ImportProgress),
+) -> anyhow::Result<ImportOutcome> {
     if let DbSpec::Sqlite { path, safe_writes: false } = &spec {
         if Path::new(path).exists() {
             let _ = copy(path, format!("{path}.old"));
@@ -88,7 +86,7 @@ pub fn run_import(
             if batch.len() >= batch_size {
                 inserted += db.import(&batch, cancel)?;
                 batch.clear();
-                let _ = tx.send(Msg::Progress {
+                on_progress(&ImportProgress {
                     bytes_done,
                     bytes_total,
                     parsed,
@@ -97,28 +95,24 @@ pub fn run_import(
                     file_index,
                     file_count,
                 });
-                ctx.request_repaint();
             }
         }
         if !batch.is_empty() {
             inserted += db.import(&batch, cancel)?;
         }
-        let _ = tx.send(Msg::Progress {
+        on_progress(&ImportProgress {
             bytes_done: bytes_total,
             bytes_total,
             parsed,
             skipped,
             written: inserted,
             file_index,
-            file_count
+            file_count,
         });
-        ctx.request_repaint();
     }
 
     if aborted {
-        tx.send(Msg::Aborted { inserted })?;
-        ctx.request_repaint();
-        return Ok(());
+        return Ok(ImportOutcome::Aborted { inserted });
     }
 
     let cross_matches = if also_match {
@@ -127,12 +121,10 @@ pub fn run_import(
     } else {
         Vec::new()
     };
-    tx.send(Msg::Done {
+    Ok(ImportOutcome::Complete {
         inserted,
         skipped,
         cross_matches,
-        ips_in_file: file_ips.len()
-    })?;
-    ctx.request_repaint();
-    Ok(())
+        ips_in_file: file_ips.len(),
+    })
 }

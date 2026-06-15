@@ -79,7 +79,7 @@ impl Settings {
     }
 }
 
-fn compose_db_path(folder: &str, name: &str) -> String {
+pub fn compose_db_path(folder: &str, name: &str) -> String {
     let name = if name.trim().is_empty() { DEFAULT_DB_NAME } else { name.trim() };
     if folder.trim().is_empty() {
         name.to_string()
@@ -88,7 +88,7 @@ fn compose_db_path(folder: &str, name: &str) -> String {
     }
 }
 
-fn compose_postgres_connection(host: &str, port: &str, user: &str, password: &str, dbname: &str) -> String {
+pub fn compose_postgres_connection(host: &str, port: &str, user: &str, password: &str, dbname: &str) -> String {
     let host = if host.trim().is_empty() { "localhost" } else { host.trim() };
     let port = if port.trim().is_empty() { "5432" } else { port.trim() };
     let user = if user.trim().is_empty() { "postgres" } else { user.trim() };

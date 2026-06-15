@@ -1,20 +1,31 @@
-mod database;
-mod model;
-mod settings;
+use salspy_core::database::{Database, DbSpec, ObservationRow};
+use salspy_core::import::{ImportOutcome, ImportProgress, run_import};
+use salspy_core::settings::{Settings, compose_db_path, compose_postgres_connection};
 
-use database::{Database, DbSpec, ObservationRow};
 use eframe::egui;
 use eframe::glow::Context;
 use std::sync::mpsc::{Receiver, Sender};
-use std::io::{BufRead, BufReader};
 use std::collections::HashSet;
-use std::fs::{File, copy, metadata};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::path::Path;
 use std::thread::spawn;
+use std::sync::mpsc::channel;
 use rfd::FileDialog;
-use settings::Settings;
+
+enum Msg {
+    Progress(ImportProgress),
+    Done {
+        inserted: usize,
+        skipped: usize,
+        cross_matches: Vec<ObservationRow>,
+        ips_in_file: usize,
+    },
+    Aborted {
+        inserted: usize,
+    },
+    Error(String),
+}
 
 #[derive(PartialEq, Clone, Copy)]
 enum Backend {
@@ -152,7 +163,7 @@ impl App {
     }
 
     fn start_import(&mut self, paths: Vec<String>, also_match: bool, ctx: egui::Context) {
-        let (tx, rx): (Sender<Msg>, Receiver<Msg>) = std::sync::mpsc::channel();
+        let (tx, rx): (Sender<Msg>, Receiver<Msg>) = channel();
         self.rx = Some(rx);
         self.busy = true;
         self.cancel.store(false, Ordering::Relaxed);
@@ -170,14 +181,45 @@ impl App {
         let actions: Vec<String> = self.selected_actions.iter().cloned().collect();
         let spec = match self.current_spec() {
             Ok(s) => s,
-            Err(e) => { self.status = e; return; }
+            Err(e) => {
+                self.status = e;
+                self.busy = false;
+                self.rx = None;
+                return;
+            }
         };
         spawn(move || {
-            let result = run_import(&paths, also_match, batch_size, spec, &actions, &cancel, &tx, &ctx);
-            if let Err(e) = result {
-                let _ = tx.send(Msg::Error(format!("{e:#}")));
-                ctx.request_repaint();
-            }
+            let progress_tx = tx.clone();
+            let progress_ctx = ctx.clone();
+            let outcome = run_import(
+                &paths,
+                also_match,
+                batch_size,
+                &spec,
+                &actions,
+                &cancel,
+                &|p: &ImportProgress| {
+                    let _ = progress_tx.send(Msg::Progress(p.clone()));
+                    progress_ctx.request_repaint();
+                },
+            );
+            let msg = match outcome {
+                Ok(ImportOutcome::Complete {
+                    inserted,
+                    skipped,
+                    cross_matches,
+                    ips_in_file,
+                }) => Msg::Done {
+                    inserted,
+                    skipped,
+                    cross_matches,
+                    ips_in_file,
+                },
+                Ok(ImportOutcome::Aborted { inserted }) => Msg::Aborted { inserted },
+                Err(e) => Msg::Error(format!("{e:#}")),
+            };
+            let _ = tx.send(msg);
+            ctx.request_repaint();
         });
     }
 
@@ -186,22 +228,14 @@ impl App {
         if let Some(rx) = &self.rx {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
-                    Msg::Progress {
-                        bytes_done,
-                        bytes_total,
-                        parsed,
-                        skipped,
-                        written,
-                        file_index,
-                        file_count,
-                    } => {
-                        self.progress_bytes_done = bytes_done;
-                        self.progress_bytes_total = bytes_total;
-                        self.progress_parsed = parsed;
-                        self.progress_skipped = skipped;
-                        self.progress_written = written;
-                        self.progress_file_index = file_index;
-                        self.progress_file_count = file_count;
+                    Msg::Progress(p) => {
+                        self.progress_bytes_done = p.bytes_done;
+                        self.progress_bytes_total = p.bytes_total;
+                        self.progress_parsed = p.parsed;
+                        self.progress_skipped = p.skipped;
+                        self.progress_written = p.written;
+                        self.progress_file_index = p.file_index;
+                        self.progress_file_count = p.file_count;
                     }
                     Msg::Done {
                         inserted,
