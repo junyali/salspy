@@ -57,14 +57,14 @@ enum Commands {
         #[arg(long)]
         xref: bool,
 
-        #[arg(long, value_delimiter = ",", value_name = "ACTION")]
+        #[arg(long, value_delimiter = ',', value_name = "ACTION")]
         actions: Vec<String>,
     },
     Search {
         #[arg(value_name = "IP")]
         ip: String,
 
-        #[arg(long, value_delimiter = ",", value_name = "ACTION")]
+        #[arg(long, value_delimiter = ',', value_name = "ACTION")]
         actions: Vec<String>,
     },
     Count,
