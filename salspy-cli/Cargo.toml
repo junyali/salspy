@@ -5,3 +5,13 @@ authors = ["junyali"]
 license = "MIT"
 edition = "2024"
 repository = "https://github.com/junyali/salspy"
+
+[[bin]]
+name = "salspy-cli"
+path = "src/main.rs"
+
+[dependencies]
+salspy-core = { path = "../salspy-core" }
+clap = { version = "4.6.1", features = ["derive"] }
+anyhow = "1.0.102"
+
