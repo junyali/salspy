@@ -151,5 +151,11 @@ fn run(cli: Cli) -> Result<()> {
                 &|p : &ImportProgress| {},
             )?;
         }
+
+        Commands::Count => {
+            let (spec, _) = resolve_spec(&cli)?;
+            let mut db = Database::open(&spec)?;
+            println!("{}", db.count()?);
+        }
     }
 }
