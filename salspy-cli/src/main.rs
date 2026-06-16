@@ -2,8 +2,11 @@ use salspy_core::database::{Database, DbSpec, ObservationRow};
 use salspy_core::settings::{compose_db_path, Settings};
 
 use std::process::ExitCode;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use clap::{Parser, Subcommand};
 use anyhow::{Result, bail};
+use salspy_core::import::{run_import, ImportProgress};
 
 #[derive(Parser)]
 #[command(
@@ -135,5 +138,18 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     match &cli.command {
+        Commands::Import { files, xref, actions } => {
+            let (spec, batch_size) = resolve_spec(&cli)?;
+            let cancel = Arc::new(AtomicBool::new(false));
+            let outcome = run_import(
+                files,
+                *xref,
+                batch_size,
+                &spec,
+                actions,
+                &cancel,
+                &|p : &ImportProgress| {},
+            )?;
+        }
     }
 }
