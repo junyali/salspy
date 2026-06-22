@@ -5,6 +5,7 @@ authors = ["junyali"]
 license = "MIT"
 edition = "2024"
 repository = "https://github.com/junyali/salspy"
+description = "A GUI Tool for reading and parsing Slack Enterprise Grid audit-log exports."
 
 [[bin]]
 name = "salspy-gui"

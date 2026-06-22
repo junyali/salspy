@@ -17,8 +17,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 #[command(
     name = "salspy",
     version,
-    about = "salspy",
-    long_about = "Slack Audit Log Spy"
+    about = "Slack Audit Log SPY",
+    long_about = "Read and parse Slack Enterprise Grid audit-log exports."
 )]
 
 struct Cli {
