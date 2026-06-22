@@ -175,5 +175,21 @@ fn run(cli: Cli) -> Result<()> {
             db.clear()?;
             eprintln!("DB cleared");
         }
+
+        Commands::Actions => {
+            let (spec, _) = resolve_spec(&cli)?;
+            let mut db = Database::open(&spec)?;
+            let actions = db.distinct_actions()?;
+            if actions.is_empty() {
+                print!("(no actions in database)");
+            } else {
+                for action in &actions {
+                    println!("{action}");
+                }
+                eprintln!("\n{} distinct action(s)", actions.len());
+            }
+        }
     }
+
+    Ok(())
 }
