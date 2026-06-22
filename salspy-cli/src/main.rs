@@ -58,6 +58,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    #[command(visible_alias = "i")]
     Import {
         #[arg(required = true, value_name = "FILE")]
         files: Vec<String>,
@@ -68,6 +69,8 @@ enum Commands {
         #[arg(long, value_delimiter = ',', value_name = "ACTION")]
         actions: Vec<String>,
     },
+
+    #[command(visible_alias = "s")]
     Search {
         #[arg(value_name = "IP")]
         ip: String,
@@ -75,11 +78,17 @@ enum Commands {
         #[arg(long, value_delimiter = ',', value_name = "ACTION")]
         actions: Vec<String>,
     },
+
+    #[command(visible_alias = "c")]
     Count,
+
+    #[command(visible_alias = "d")]
     Clear {
         #[arg(long)]
         yes: bool,
     },
+
+    #[command(visible_alias = "a")]
     Actions,
 }
 
