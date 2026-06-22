@@ -6,12 +6,14 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use clap::{Parser, Subcommand};
-use anyhow::{Result, bail};
+use anyhow::{Result, Context, bail};
 use salspy_core::import::{run_import, ImportProgress, ImportOutcome};
 use std::fmt::Write as FmtWrite;
 use std::io::{stderr, stdin, Write as IoWrite};
 use minus::{Pager, page_all};
 use indicatif::{ProgressBar, ProgressStyle};
+use std::path::Path;
+use std::fs::read_dir;
 
 #[derive(Parser)]
 #[command(
@@ -98,6 +100,8 @@ enum Commands {
     Actions,
 }
 
+const EXTENSIONS: &[&str] = &["ndjson", "json", "jsonl", "txt"];
+
 fn any_postgres_flag(cli: &Cli) -> bool {
     cli.postgres_host.is_some() || cli.postgres_port.is_some() || cli.postgres_user.is_some() || cli.postgres_password.is_some() || cli.postgres_dbname.is_some()
 }
@@ -144,6 +148,42 @@ fn resolve_spec(cli: &Cli) -> Result<(DbSpec, usize)> {
 
     Ok((spec, batch_size))
 }
+
+fn expand_file_args(inputs: &[String]) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for input in inputs {
+        let path = Path::new(input);
+        if path.is_dir() {
+            let mut found = Vec::new();
+            for entry in read_dir(path).with_context(|| format!("reading directory {input}"))? {
+                let entry = entry?;
+                let entry_path = entry.path();
+                if !entry_path.is_file() {
+                    continue;
+                }
+                let ext_ok = entry_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| EXTENSIONS.contains(&e.to_lowercase().as_str()))
+                    .unwrap_or(false);
+                if ext_ok {
+                    found.push(entry_path.to_string_lossy().to_string());
+                }
+            }
+            found.sort();
+            if found.is_empty() {
+                eprintln!("No matching files found in directory: {input}");
+            }
+            out.extend(found);
+        } else if path.is_file() {
+            out.push(input.clone());
+        } else {
+            bail!("Path does not exist or is not accessible: {input}")
+        }
+    }
+    Ok(out)
+}
+
 fn byte_bar_style() -> ProgressStyle {
     ProgressStyle::with_template("{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) - {msg}").unwrap().progress_chars("█▉▊▋▌▍▎▏ ")
 }
@@ -248,12 +288,16 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<()> {
     match &cli.command {
         Commands::Import { files, xref, actions, full } => {
+            let files = expand_file_args(files)?;
+            if files.is_empty() {
+                bail!("No files to import.");
+            }
             let (spec, batch_size) = resolve_spec(&cli)?;
             let cancel = Arc::new(AtomicBool::new(false));
             let last_file_index: Cell<usize> = Cell::new(usize::MAX);
             let current_bar: Cell<Option<ProgressBar>> = Cell::new(None);
             let outcome = run_import(
-                files,
+                &files,
                 *xref,
                 batch_size,
                 &spec,
