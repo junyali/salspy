@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicBool;
 use clap::{Parser, Subcommand};
 use anyhow::{Result, bail};
 use salspy_core::import::{run_import, ImportProgress};
+use std::io::{stderr, stdin};
 
 #[derive(Parser)]
 #[command(
@@ -156,6 +157,23 @@ fn run(cli: Cli) -> Result<()> {
             let (spec, _) = resolve_spec(&cli)?;
             let mut db = Database::open(&spec)?;
             println!("{}", db.count()?);
+        }
+
+        Commands::Clear { yes } => {
+            if !yes {
+                eprint!("Delete ALL rows from DB? [y/N] ");
+                stderr().flush()?;
+                let mut input = String::new();
+                stdin().read_line(&mut input)?;
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    eprintln!("Aborted");
+                    return Ok(());
+                }
+            }
+            let (spec, _) = resolve_spec(&cli)?;
+            let mut db = Database::open(&spec)?;
+            db.clear()?;
+            eprintln!("DB cleared");
         }
     }
 }
