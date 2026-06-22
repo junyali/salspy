@@ -68,6 +68,9 @@ enum Commands {
 
         #[arg(long, value_delimiter = ',', value_name = "ACTION")]
         actions: Vec<String>,
+
+        #[arg(long, short = 'f')]
+        full: bool,
     },
 
     #[command(visible_alias = "s")]
@@ -77,6 +80,9 @@ enum Commands {
 
         #[arg(long, value_delimiter = ',', value_name = "ACTION")]
         actions: Vec<String>,
+
+        #[arg(long, short = 'f')]
+        full: bool,
     },
 
     #[command(visible_alias = "c")]
@@ -150,12 +156,7 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-fn page_results(rows: &[ObservationRow]) -> Result<()> {
-    if rows.is_empty() {
-        eprintln!("(no results)");
-        return Ok(());
-    }
-
+fn write_table(pager: &mut Pager, rows: &[ObservationRow]) -> Result<()> {
     const W_IP: usize = 39;
     const W_USER: usize = 26;
     const W_EMAIL: usize = 32;
@@ -167,9 +168,6 @@ fn page_results(rows: &[ObservationRow]) -> Result<()> {
         "{:-<W_IP$}  {:-<W_USER$}  {:-<W_EMAIL$}  {:-<W_UA$}  {:-<W_JA3$}  {:->W_HITS$}",
         "", "", "", "", "", ""
     );
-
-    let mut pager = Pager::new();
-    pager.set_prompt(format!("{} result(s) - q to quit, / to search", rows.len()))?;
 
     writeln!(
         pager,
@@ -198,6 +196,39 @@ fn page_results(rows: &[ObservationRow]) -> Result<()> {
 
     writeln!(pager, "{divider}")?;
     writeln!(pager, "{} row(s)", rows.len())?;
+    Ok(())
+}
+
+fn write_full(pager: &mut Pager, rows: &[ObservationRow]) -> Result<()> {
+    for (i, r) in rows.iter().enumerate() {
+        writeln!(pager, "--#{}--------------------------", i + 1)?;
+        writeln!(pager, "IP:        {}", r.ip)?;
+        writeln!(pager, "User:      {} ({})", r.user_name.as_deref().unwrap_or("?"), r.user_id)?;
+        writeln!(pager, "Email:     {}", r.user_email.as_deref().unwrap_or(""))?;
+        writeln!(pager, "UA:        {}", r.user_agent.as_deref().unwrap_or(""))?;
+        writeln!(pager, "JA3:       {}", r.ja3.as_deref().unwrap_or(""))?;
+        writeln!(pager, "Hits:      {}", r.hits)?;
+        writeln!(pager)?;
+    }
+    writeln!(pager, "{} row(s)", rows.len())?;
+    Ok(())
+}
+
+fn page_results(rows: &[ObservationRow], full: bool) -> Result<()> {
+    if rows.is_empty() {
+        eprintln!("(no results)");
+        return Ok(());
+    }
+
+    let mut pager = Pager::new();
+    let hint = if full { "q to quit, / to search" } else { "q to quit, / to search, --full for complete values" };
+    pager.set_prompt(format!("{} result(s) - {hint}", rows.len()))?;
+
+    if full {
+        write_full(&mut pager, rows)?;
+    } else {
+        write_table(&mut pager, rows)?;
+    }
 
     page_all(pager)?;
     Ok(())
@@ -216,7 +247,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<()> {
     match &cli.command {
-        Commands::Import { files, xref, actions } => {
+        Commands::Import { files, xref, actions, full } => {
             let (spec, batch_size) = resolve_spec(&cli)?;
             let cancel = Arc::new(AtomicBool::new(false));
             let last_file_index: Cell<usize> = Cell::new(usize::MAX);
@@ -262,7 +293,7 @@ fn run(cli: Cli) -> Result<()> {
                     if *xref {
                         eprintln!("  {ips_in_file} unique IPs checked - {} matches", cross_matches.len());
                         if !cross_matches.is_empty() {
-                            page_results(&cross_matches)?;
+                            page_results(&cross_matches, *full)?;
                         }
                     }
                 }
@@ -272,11 +303,11 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
 
-        Commands::Search { ip, actions } => {
+        Commands::Search { ip, actions, full } => {
             let (spec, _) = resolve_spec(&cli)?;
             let mut db = Database::open(&spec)?;
             let rows = db.search_ip(ip, actions)?;
-            page_results(&rows)?;
+            page_results(&rows, *full)?;
         }
 
         Commands::Count => {
