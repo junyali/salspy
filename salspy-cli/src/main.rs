@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use salspy_core::database::{Database, DbSpec, ObservationRow};
 use salspy_core::settings::{compose_db_path, Settings};
 
@@ -6,10 +7,11 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use clap::{Parser, Subcommand};
 use anyhow::{Result, bail};
-use salspy_core::import::{run_import, ImportProgress};
+use salspy_core::import::{run_import, ImportProgress, ImportOutcome};
 use std::fmt::Write as FmtWrite;
 use std::io::{stderr, stdin, Write as IoWrite};
 use minus::{Pager, page_all};
+use indicatif::{ProgressBar, ProgressStyle};
 
 #[derive(Parser)]
 #[command(
@@ -127,6 +129,9 @@ fn resolve_spec(cli: &Cli) -> Result<(DbSpec, usize)> {
 
     Ok((spec, batch_size))
 }
+fn byte_bar_style() -> ProgressStyle {
+    ProgressStyle::with_template("{spinner:.cyan} [{elapsed_precise}] [{bar:40.cyan/blue}] {bytes}/{total_bytes} ({eta}) - {msg}").unwrap().progress_chars("█▉▊▋▌▍▎▏ ")
+}
 
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() > max {
@@ -205,6 +210,8 @@ fn run(cli: Cli) -> Result<()> {
         Commands::Import { files, xref, actions } => {
             let (spec, batch_size) = resolve_spec(&cli)?;
             let cancel = Arc::new(AtomicBool::new(false));
+            let last_file_index: Cell<usize> = Cell::new(usize::MAX);
+            let current_bar: Cell<Option<ProgressBar>> = Cell::new(None);
             let outcome = run_import(
                 files,
                 *xref,
@@ -212,8 +219,48 @@ fn run(cli: Cli) -> Result<()> {
                 &spec,
                 actions,
                 &cancel,
-                &|p : &ImportProgress| {},
+                &|p : &ImportProgress| {
+                    if p.file_index != last_file_index.get() {
+                        if let Some(old) = current_bar.take() {
+                            old.finish_and_clear();
+                        }
+                        let new_pb = ProgressBar::new(p.bytes_total);
+                        new_pb.set_style(byte_bar_style());
+                        current_bar.set(Some(new_pb));
+                        last_file_index.set(p.file_index);
+                    }
+                    if let Some(bar) = current_bar.take() {
+                        bar.set_position(p.bytes_done);
+                        bar.set_message(format!(
+                            "file {}/{} | {} written | {} skipped",
+                            p.file_index + 1,
+                            p.file_count,
+                            p.written,
+                            p.skipped
+                        ));
+                        current_bar.set(Some(bar));
+                    }
+                },
             )?;
+
+            if let Some(bar) = current_bar.into_inner() {
+                bar.finish_and_clear();
+            }
+
+            match outcome {
+                ImportOutcome::Complete { inserted, skipped, cross_matches, ips_in_file } => {
+                    eprintln!("Done: {inserted} written, {skipped} skipped");
+                    if *xref {
+                        eprintln!("  {ips_in_file} unique IPs checked - {} matches", cross_matches.len());
+                        if !cross_matches.is_empty() {
+                            page_results(&cross_matches)?;
+                        }
+                    }
+                }
+                ImportOutcome::Aborted { inserted } => {
+                    eprintln!("Aborted: {inserted} written before cancel");
+                }
+            }
         }
 
         Commands::Search { ip, actions } => {
