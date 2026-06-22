@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use anyhow::{Result, bail};
 use salspy_core::import::{run_import, ImportProgress};
 use std::io::{stderr, stdin};
+use minus::{Pager, page_all};
 
 #[derive(Parser)]
 #[command(
@@ -124,6 +125,67 @@ fn resolve_spec(cli: &Cli) -> Result<(DbSpec, usize)> {
     };
 
     Ok((spec, batch_size))
+}
+
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        format!("{}...", s.chars().take(max.saturating_sub(1)).collect::<String>())
+    } else {
+        s.to_string()
+    }
+}
+
+fn page_results(rows: &[ObservationRow]) -> Result<()> {
+    if rows.is_empty() {
+        eprintln!("(no results)");
+        return Ok(());
+    }
+
+    const W_IP: usize = 39;
+    const W_USER: usize = 26;
+    const W_EMAIL: usize = 32;
+    const W_UA: usize = 48;
+    const W_JA3: usize = 32;
+    const W_HITS: usize = 6;
+
+    let divider = format!(
+        "{:-<W_IP$}  {:-<W_USER$}  {:-<W_EMAIL$}  {:-<W_UA$}  {:-<W_JA3$}  {:->W_HITS$}",
+        "", "", "", "", "", ""
+    );
+
+    let mut pager = Pager::new();
+    pager.set_prompt(format!("{} result(s) - q to quit, / to search", rows.len()))?;
+
+    writeln!(
+        pager,
+        "{:<W_IP$}  {:<W_USER$}  {:<W_EMAIL$}  {:<W_UA$}  {:<W_JA3$}  {:>W_HITS$}",
+        "IP", "USER (ID)", "EMAIL", "USER AGENT", "JA3", "HITS"
+    )?;
+    writeln!(pager, "{divider}")?;
+
+    for row in rows {
+        let user_col = format!(
+            "{} ({})",
+            row.user_name.as_deref().unwrap_or("?"),
+            &row.user_id, 12,
+        );
+        writeln!(
+            pager,
+            "{:<W_IP$}  {:<W_USER$}  {:<W_EMAIL$}  {:<W_UA$}  {:<W_JA3$}  {:>W_HITS$}",
+            row.ip,
+            truncate(&user_col, W_USER),
+            truncate(row.user_email.as_deref().unwrap_or(""), W_EMAIL),
+            truncate(row.user_agent.as_deref().unwrap_or(""), W_UA),
+            truncate(row.ja3.as_deref().unwrap_or(""), W_JA3),
+            row.hits,
+        )?;
+    }
+
+    writeln!(pager, "{divider}")?;
+    writeln!(pager, "{} row(s)", rows.len())?;
+
+    page_all(pager)?;
+    Ok(())
 }
 
 fn main() -> ExitCode {
