@@ -7,7 +7,8 @@ use std::sync::atomic::AtomicBool;
 use clap::{Parser, Subcommand};
 use anyhow::{Result, bail};
 use salspy_core::import::{run_import, ImportProgress};
-use std::io::{stderr, stdin};
+use std::fmt::Write as FmtWrite;
+use std::io::{stderr, stdin, Write as IoWrite};
 use minus::{Pager, page_all};
 
 #[derive(Parser)]
@@ -167,7 +168,7 @@ fn page_results(rows: &[ObservationRow]) -> Result<()> {
         let user_col = format!(
             "{} ({})",
             row.user_name.as_deref().unwrap_or("?"),
-            &row.user_id, 12,
+            &row.user_id,
         );
         writeln!(
             pager,
