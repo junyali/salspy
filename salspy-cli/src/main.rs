@@ -287,13 +287,20 @@ fn run(cli: Cli) -> Result<()> {
 
         Commands::Clear { yes } => {
             if !yes {
-                eprint!("Delete ALL rows from DB? [y/N] ");
-                stderr().flush()?;
-                let mut input = String::new();
-                stdin().read_line(&mut input)?;
-                if !input.trim().eq_ignore_ascii_case("y") {
-                    eprintln!("Aborted");
-                    return Ok(());
+                let confirms = [
+                    "Are you sure? [y/N] ",
+                    "Are you really sure? [y/N] ",
+                    "Are you absolutely sure? This is irreversible. [y/N] ",
+                ];
+                for prompt in confirms {
+                    eprint!("{prompt}");
+                    stderr().flush()?;
+                    let mut input = String::new();
+                    stdin().read_line(&mut input)?;
+                    if !input.trim().eq_ignore_ascii_case("y") {
+                        eprintln!("Aborted");
+                        return Ok(());
+                    }
                 }
             }
             let (spec, _) = resolve_spec(&cli)?;
