@@ -216,6 +216,13 @@ fn run(cli: Cli) -> Result<()> {
             )?;
         }
 
+        Commands::Search { ip, actions } => {
+            let (spec, _) = resolve_spec(&cli)?;
+            let mut db = Database::open(&spec)?;
+            let rows = db.search_ip(ip, actions)?;
+            page_results(&rows)?;
+        }
+
         Commands::Count => {
             let (spec, _) = resolve_spec(&cli)?;
             let mut db = Database::open(&spec)?;
