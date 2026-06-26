@@ -114,11 +114,11 @@ fn resolve_spec(cli: &Cli) -> Result<(DbSpec, usize)> {
         Some("postgres") => "postgres",
         Some("sqlite") => {
             if postgres_implied {
-                bail!("");
+                bail!("Cannot use sqlite backend with PostgreSQL flags");
             }
             "sqlite"
         }
-        Some(other) => bail!(""),
+        Some(other) => bail!("Unknown backend '{other}'. Use 'sqlite' or 'postgres'"),
         None => {
             if postgres_implied { "postgres" } else { cfg.backend.as_str() }
         }
