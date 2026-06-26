@@ -452,7 +452,7 @@ impl App {
         if also_match {
             self.ui_action_filter(ui);
         }
-        let can_run = !self.import_paths.is_empty();
+        let can_run = !self.import_paths.is_empty() && !self.busy;
         if ui.add_enabled(can_run, egui::Button::new("Import")).clicked() {
             self.cross_results.clear();
             let paths = self.import_paths.clone();
