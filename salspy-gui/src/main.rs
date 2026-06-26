@@ -480,7 +480,7 @@ impl App {
             self.run_search();
         }
         ui.separator();
-        results_table(ui, "cross_results", &self.search_results);
+        results_table(ui, "search_results", &self.search_results);
     }
 
     fn ui_settings(&mut self, ui: &mut egui::Ui) {
