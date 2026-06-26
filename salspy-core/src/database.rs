@@ -73,7 +73,7 @@ impl Database {
 
     pub fn import(&mut self, obs: &[Observation], cancel: &Arc<AtomicBool>) -> Result<usize> {
         match self {
-            Database::Sqlite(conn) => import_sqlite(conn, obs),
+            Database::Sqlite(conn) => import_sqlite(conn, obs, cancel),
             Database::Postgres(client) => import_postgres(client, obs, cancel),
         }
     }
@@ -126,7 +126,7 @@ impl Database {
     }
 }
 
-fn import_sqlite(conn: &mut Connection, obs: &[Observation]) -> Result<usize> {
+fn import_sqlite(conn: &mut Connection, obs: &[Observation], cancel: &Arc<AtomicBool>) -> Result<usize> {
     let tx = conn.transaction()?;
     let mut affected = 0usize;
     {
@@ -168,6 +168,10 @@ fn import_sqlite(conn: &mut Connection, obs: &[Observation]) -> Result<usize> {
                 ])?;
             affected += 1;
         }
+    }
+    if cancel.load(Ordering::Relaxed) {
+        tx.rollback()?;
+        return Ok(0);
     }
     tx.commit()?;
     Ok(affected)
