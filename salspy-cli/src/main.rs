@@ -389,7 +389,7 @@ fn run(cli: Cli) -> Result<()> {
             let mut db = Database::open(&spec)?;
             let actions = db.distinct_actions()?;
             if actions.is_empty() {
-                print!("(no actions in database)");
+                println!("(no actions in database)");
             } else {
                 for action in &actions {
                     println!("{action}");

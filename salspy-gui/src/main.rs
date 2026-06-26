@@ -402,7 +402,7 @@ impl eframe::App for App {
 }
 
 impl App {
-    fn ui_import(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, also_match:bool) {
+    fn ui_import(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, also_match: bool) {
         if also_match {
             ui.heading("Import a file and X-reference IPs");
             ui.label("Lists every existing user in DB with matching IPs to file");
@@ -492,7 +492,7 @@ impl App {
             egui::ComboBox::from_id_salt("backend_select")
                 .selected_text(self.backend.label())
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.backend, Backend:: Sqlite, Backend::Sqlite.label());
+                    ui.selectable_value(&mut self.backend, Backend::Sqlite, Backend::Sqlite.label());
                     ui.selectable_value(&mut self.backend, Backend::Postgres, Backend::Postgres.label());
                 });
         });
