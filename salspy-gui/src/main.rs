@@ -640,10 +640,10 @@ impl App {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if ui.small_button("All").clicked() {
-                        self.selected_actions.clear();
+                        self.selected_actions = self.known_actions.iter().cloned().collect();
                     }
                     if ui.small_button("None").clicked() {
-                        self.selected_actions = self.known_actions.iter().cloned().collect();
+                        self.selected_actions.clear();
                     }
                 });
                 egui::ScrollArea::vertical()
