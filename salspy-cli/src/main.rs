@@ -190,7 +190,7 @@ fn byte_bar_style() -> ProgressStyle {
 
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() > max {
-        format!("{}...", s.chars().take(max.saturating_sub(1)).collect::<String>())
+        format!("{}...", s.chars().take(max.saturating_sub(3)).collect::<String>())
     } else {
         s.to_string()
     }
