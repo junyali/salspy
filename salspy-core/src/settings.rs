@@ -39,7 +39,7 @@ impl Default for Settings {
 
 impl Settings {
     fn config_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|d| d.join("salgui").join(CONFIG_FILE))
+        dirs::config_dir().map(|d| d.join("salspy").join(CONFIG_FILE))
     }
 
     pub fn load() -> Self {
