@@ -15,6 +15,8 @@ A tool for reading and parsing Slack Enterprise Grid audit log exports.
 
 salSPY can be launched via the GUI or the CLI. Download the latest binaries from [releases](https://github.com/junyali/salspy/releases/latest).
 
+Samples logs are provided in `sample` for demo purposes.
+
 ### Using the CLI
 
 | Command              | Description                                |
