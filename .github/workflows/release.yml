@@ -60,7 +60,7 @@ jobs:
           mkdir -p dist
           cp target/${{ matrix.target }}/release/salspy-cli dist/
           cp target/${{ matrix.target }}/release/salspy-gui dist/
-          tar-czf salspy-${{ matrix.target }}.tar.gz -C dist .
+          tar -czf salspy-${{ matrix.target }}.tar.gz -C dist .
       - name: Package (Windows)
         if: matrix.archive == 'zip'
         shell: pwsh
